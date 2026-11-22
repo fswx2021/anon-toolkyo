@@ -11,6 +11,27 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
+POWERSHELL_UPLOAD = r"""
+$ErrorActionPreference = 'Stop'
+$headers = @{
+    Authorization = ('Bearer ' + $env:ANON_RELEASE_UPLOAD_TOKEN)
+    Accept = 'application/vnd.github+json'
+    'X-GitHub-Api-Version' = '2022-11-28'
+}
+$upload = @{
+    Uri = $env:ANON_RELEASE_UPLOAD_URL
+    Method = 'Post'
+    Headers = $headers
+    InFile = $env:ANON_RELEASE_UPLOAD_FILE
+    ContentType = $env:ANON_RELEASE_UPLOAD_TYPE
+    MaximumRedirection = 0
+    TimeoutSec = 240
+}
+$result = Invoke-RestMethod @upload
+$result | ConvertTo-Json -Depth 8 -Compress
+"""
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # Keep the credential on the specific GitHub endpoint selected by the caller.
@@ -85,10 +106,25 @@ class GitHubRelease:
 
     def upload(self, release_id, path):
         query = urlencode({"name": path.name})
+        route = f"/releases/{release_id}/assets?{query}"
+        content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        powershell = shutil.which("pwsh") if os.name == "nt" else None
+        if powershell:
+            # PowerShell uses the system HTTPS client and proxy for large APK uploads.
+            environment = dict(os.environ, ANON_RELEASE_UPLOAD_TOKEN=self.token,
+                               ANON_RELEASE_UPLOAD_URL=f"https://uploads.github.com{self.repository}{route}",
+                               ANON_RELEASE_UPLOAD_FILE=str(path.resolve()), ANON_RELEASE_UPLOAD_TYPE=content_type)
+            response = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_UPLOAD],
+                env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if response.returncode:
+                raise ValueError(f"GitHub asset upload failed: {path.name}. Rerun to resume the draft.")
+            return json.loads(response.stdout)
         with path.open("rb") as stream:
-            return self.request("uploads.github.com", f"/releases/{release_id}/assets?{query}", method="POST",
+            return self.request("uploads.github.com", route, method="POST",
                                 data=stream, headers={
-                                    "Content-Type": mimetypes.guess_type(path)[0] or "application/octet-stream",
+                                    "Content-Type": content_type,
                                     "Content-Length": str(path.stat().st_size),
                                 })
 
