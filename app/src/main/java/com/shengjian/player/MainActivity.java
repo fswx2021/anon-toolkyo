@@ -31,6 +31,7 @@ import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.text.format.Formatter;
 import android.util.LruCache;
 import android.view.*;
 import android.view.inputmethod.EditorInfo;
@@ -55,6 +56,7 @@ public final class MainActivity extends ComponentActivity {
     private static final int NOVEL_SOURCE = 104;
     private static final int BACKUP_SAVE = 115;
     private static final int BACKUP_RESTORE = 116;
+    private static final int UPDATE_INSTALL_PERMISSION = 117;
     private static final int MUSIC = 0;
     private static final int COMICS = 1;
     private static final int NOVELS = 2;
@@ -76,7 +78,8 @@ public final class MainActivity extends ComponentActivity {
     private static volatile MusicImportTask activeImport;
     private static ReaderCache readerCache;
     private final ExecutorService images = Executors.newFixedThreadPool(2);
-    private final AppUpdates appUpdates = new AppUpdates(BuildConfig.UPDATE_GITHUB_REPOSITORY);
+    private final AppUpdates appUpdates = new AppUpdates(
+            BuildConfig.UPDATE_GITHUB_REPOSITORY, BuildConfig.UPDATE_MIRROR_BASE);
     private final ExecutorService updateRequests = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LruCache<String, Bitmap> artworkCache = new LruCache<>(20);
@@ -92,8 +95,13 @@ public final class MainActivity extends ComponentActivity {
     private AnimeSection anime;
     private SharedPreferences appSettings;
     private AppUpdates.Release availableAppUpdate;
+    private AppUpdates.Release pendingStartupUpdate;
+    private AppUpdateInstaller updateInstaller;
+    private UpdateDownload updateDownload;
+    private File pendingUpdateInstall, installAfterPermission;
     private Sheet updateSheet;
-    private boolean checkingAppUpdate, showUpdateCheckResult;
+    private boolean checkedOnLaunch, checkingAppUpdate, showUpdateCheckResult;
+    private int promptedUpdateVersion;
     private boolean backupContent;
     private static volatile boolean backupBusy;
     private static boolean loadedApplication;
@@ -172,6 +180,7 @@ public final class MainActivity extends ComponentActivity {
         PlayerViews.appearance(appearance == 2 || appearance == 0 && systemDark);
         if (PlayerViews.dark()) setTheme(R.style.PlayerDarkTheme);
         super.onCreate(state);
+        updateInstaller = new AppUpdateInstaller(this);
         LaunchMotion.useCustomSplash(this);
         library = Library.get(this);
         if (readerCache == null) readerCache = new ReaderCache(new File(getFilesDir(), "reader-offline"));
@@ -186,6 +195,11 @@ public final class MainActivity extends ComponentActivity {
             targetId = state.getString("target", "");
             filter = state.getInt("music_filter", ALL_TRACKS);
             playlistId = state.getString("music_playlist", "");
+            String pendingInstall = state.getString("pending_update_install");
+            if (pendingInstall != null) pendingUpdateInstall = new File(pendingInstall);
+            String permissionInstall = state.getString("update_after_permission");
+            if (permissionInstall != null) installAfterPermission = new File(permissionInstall);
+            promptedUpdateVersion = state.getInt("prompted_update_version");
         }
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -234,9 +248,8 @@ public final class MainActivity extends ComponentActivity {
                     && AndroidReaderSources.get(this).list(ReaderSources.NOVEL).isEmpty()
                     && AndroidReaderSources.get(this).list(ReaderSources.COMIC).isEmpty()) {
                 showGuide();
-            } else if (launcherStart) {
-                checkAppUpdate(false);
             }
+            if (launcherStart) checkAppUpdate(false);
         };
         if (launcherStart) LaunchMotion.show(root, afterLaunch);
         else afterLaunch.run();
@@ -254,6 +267,9 @@ public final class MainActivity extends ComponentActivity {
         state.putBoolean("app_settings_open", appSettingsPage != null);
         state.putBoolean("open_source_page", openSourcePage != null);
         state.putString("open_license", openLicenseAsset);
+        if (pendingUpdateInstall != null) state.putString("pending_update_install", pendingUpdateInstall.getPath());
+        if (installAfterPermission != null) state.putString("update_after_permission", installAfterPermission.getPath());
+        state.putInt("prompted_update_version", promptedUpdateVersion);
         if (!inPlayer && readers[section] != null) readers[section].saveState(state);
         super.onSaveInstanceState(state);
     }
@@ -265,6 +281,11 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onResume() {
         super.onResume();
         if (section == ANIME && anime != null) anime.onSelected();
+        main.post(this::presentPendingAppUpdate);
+    }
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) presentPendingAppUpdate();
     }
     @Override protected void onStop() {
         savePosition();
@@ -275,6 +296,7 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onDestroy() {
         if (effectsDialog != null) effectsDialog.dismiss();
         if (musicDownloadProgress != null) musicDownloadProgress.sheet.dialog.dismiss();
+        if (updateDownload != null) updateDownload.transfer.cancel();
         if (updateSheet != null) updateSheet.dialog.dismiss();
         updateRequests.shutdownNow();
         if (musicOnline != null) musicOnline.close();
@@ -371,6 +393,7 @@ public final class MainActivity extends ComponentActivity {
         miniCard.setVisibility(homeActive && section == MUSIC && visible && current() != null
                 ? View.VISIBLE : View.GONE);
         sectionBar.setVisibility(visibility);
+        if (homeActive && !reading && pendingStartupUpdate != null) presentPendingAppUpdate();
     }
 
     private void updateHomeWidth(boolean reading) {
@@ -1473,6 +1496,17 @@ public final class MainActivity extends ComponentActivity {
 
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == UPDATE_INSTALL_PERMISSION) {
+            File apk = installAfterPermission;
+            installAfterPermission = null;
+            if (apk != null && updateInstaller.canInstall()) {
+                pendingUpdateInstall = apk;
+                main.post(this::presentPendingAppUpdate);
+            } else if (apk != null) {
+                toast("更新已下载。允许安装后，可以从检查更新继续。");
+            }
+            return;
+        }
         if (request == MusicOnlineSection.REQUEST_IMPORT_MUSIC_SOURCE) {
             if (result == RESULT_OK && data != null && data.getData() != null) musicOnline.handleImportFile(data.getData());
             return;
@@ -1570,10 +1604,8 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
         if (!manual) {
-            long now = System.currentTimeMillis();
-            if (appSettings.getInt("startup_update_check", 0) != 0 || checkingAppUpdate
-                    || !AppUpdates.due(now, appSettings.getLong("last_startup_update_check", 0))) return;
-            appSettings.edit().putLong("last_startup_update_check", now).apply();
+            if (appSettings.getInt("startup_update_check", 0) != 0 || checkedOnLaunch || checkingAppUpdate) return;
+            checkedOnLaunch = true;
         } else {
             showUpdateCheckResult = true;
             toast("正在检查更新…");
@@ -1606,27 +1638,44 @@ public final class MainActivity extends ComponentActivity {
             return;
         }
         availableAppUpdate = release != null && release.newerThan(BuildConfig.VERSION_CODE) ? release : null;
-        if (!foreground) return;
         if (availableAppUpdate == null) {
-            if (manual) toast(release == null ? "更新渠道暂无正式版本" : "已是最新版本");
+            pendingStartupUpdate = null;
+            if (manual && foreground) toast(release == null ? "更新渠道暂无正式版本" : "已是最新版本");
+            return;
+        }
+        if (manual && foreground && updateDownload == null && installAfterPermission == null) {
+            showAppUpdate(availableAppUpdate);
+        } else if (availableAppUpdate.versionCode() > promptedUpdateVersion) {
+            pendingStartupUpdate = availableAppUpdate;
+            presentPendingAppUpdate();
+        }
+    }
+
+    private void presentPendingAppUpdate() {
+        if (!hasWindowFocus() || isFinishing() || isDestroyed()
+                || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)
+                || updateSheet != null || updateDownload != null || installAfterPermission != null) return;
+        if (pendingUpdateInstall != null) {
+            File apk = pendingUpdateInstall;
+            pendingUpdateInstall = null;
+            requestUpdateInstallation(apk);
             return;
         }
         ReaderSection reader = readers[section];
-        if (manual || (hasWindowFocus() && !inPlayer && appSettingsPage == null
-                && (reader == null || !reader.isReading()))) {
-            showAppUpdate(availableAppUpdate);
-        } else {
-            toast("发现新版本 " + availableAppUpdate.versionName() + "，可在「关于与数据」查看");
+        if (pendingStartupUpdate != null && !inPlayer && appSettingsPage == null && !keyboardVisible
+                && (reader == null || !reader.isReading()) && appSettings.getInt("startup_update_check", 0) == 0) {
+            showAppUpdate(pendingStartupUpdate);
         }
     }
 
     private void showAppUpdate(AppUpdates.Release update) {
-        if (updateSheet != null) updateSheet.dialog.dismiss();
-        Sheet sheet = sheet("更新到 " + update.versionName(), "download");
-        updateSheet = sheet;
-        sheet.dialog.setOnDismissListener(dialog -> {
-            if (updateSheet == sheet) updateSheet = null;
-        });
+        showAppUpdate(update, "");
+    }
+
+    private void showAppUpdate(AppUpdates.Release update, String downloadError) {
+        promptedUpdateVersion = Math.max(promptedUpdateVersion, update.versionCode());
+        pendingStartupUpdate = null;
+        Sheet sheet = updateSheet("更新到 " + update.versionName());
         if (!update.notes().isEmpty()) {
             ScrollView scroll = new ScrollView(this);
             TextView notes = text(update.notes(), 14, FG, false);
@@ -1634,13 +1683,92 @@ public final class MainActivity extends ComponentActivity {
             scroll.addView(notes, new ScrollView.LayoutParams(M, W));
             add(sheet.body, scroll, update.notes().length() > 180 ? 200 : W, 8);
         }
-        add(sheet.body, text("浏览器会下载官方 APK。下载完成后，打开文件确认安装。", 13, MUTED, false), W, 8);
-        add(sheet.body, action("下载更新", true, () -> {
+        if (!downloadError.isEmpty()) {
+            add(sheet.body, text(downloadError, 13, MUTED, false), W, 8);
+        }
+        String downloadLabel = downloadError.isEmpty() ? "应用内下载并安装" : "重试下载并安装";
+        add(sheet.body, action(downloadLabel, true, () -> startAppUpdateDownload(update)), 48, 12);
+        add(sheet.body, action("去网站下载", false, () -> {
             sheet.dialog.dismiss();
-            openBrowser(Uri.parse(update.apkUrl().toString()));
-        }), 48, 12);
+            openBrowser(Uri.parse(update.websiteUrl().toString()));
+        }), 48, 6);
         add(sheet.body, action("稍后", false, sheet.dialog::dismiss), 48, 6);
         sheet.show();
+    }
+
+    private Sheet updateSheet(String heading) {
+        if (updateSheet != null) updateSheet.dialog.dismiss();
+        Sheet sheet = sheet(heading, "download");
+        updateSheet = sheet;
+        sheet.dialog.setOnDismissListener(dialog -> {
+            if (updateSheet == sheet) updateSheet = null;
+        });
+        return sheet;
+    }
+
+    private void startAppUpdateDownload(AppUpdates.Release release) {
+        if (updateDownload != null) return;
+        UpdateDownload download = new UpdateDownload(release);
+        updateDownload = download;
+        download.sheet.show();
+        updateRequests.execute(() -> {
+            try {
+                File apk = updateInstaller.download(release, download.transfer, download::progress);
+                main.post(() -> finishUpdateDownload(download, apk, null));
+            } catch (IOException failure) {
+                main.post(() -> finishUpdateDownload(download, null, failure));
+            }
+        });
+    }
+
+    private void finishUpdateDownload(UpdateDownload download, File apk, IOException failure) {
+        if (isFinishing() || isDestroyed() || updateDownload != download) return;
+        updateDownload = null;
+        download.sheet.dialog.dismiss();
+        if (updateSheet == download.sheet) updateSheet = null;
+        boolean foreground = getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+        if (download.cancelled) {
+            if (apk != null) updateInstaller.discard(apk);
+            if (foreground) toast("已取消下载");
+        } else if (failure != null) {
+            if (foreground) {
+                String message = failure.getMessage();
+                showAppUpdate(download.release, TextUtils.isEmpty(message) ? "更新下载失败，请重试。" : message);
+            }
+        } else {
+            pendingUpdateInstall = apk;
+            main.post(this::presentPendingAppUpdate);
+        }
+    }
+
+    private void requestUpdateInstallation(File apk) {
+        if (updateInstaller.canInstall()) {
+            try {
+                startActivity(updateInstaller.installIntent(apk));
+            } catch (IOException | ActivityNotFoundException | SecurityException unavailable) {
+                installUnavailable("无法打开系统安装程序");
+            }
+            return;
+        }
+        Sheet permission = updateSheet("允许安装更新");
+        add(permission.body, text("更新已下载。请在系统设置中允许此应用安装，然后返回确认安装。", 14, MUTED, false), W, 8);
+        add(permission.body, action("去系统设置", true, () -> {
+            permission.dialog.dismiss();
+            try {
+                installAfterPermission = apk;
+                startActivityForResult(updateInstaller.installationPermissionIntent(), UPDATE_INSTALL_PERMISSION);
+            } catch (ActivityNotFoundException | SecurityException unavailable) {
+                installAfterPermission = null;
+                installUnavailable("无法打开安装权限设置");
+            }
+        }), 48, 12);
+        add(permission.body, action("稍后", false, permission.dialog::dismiss), 48, 6);
+        permission.show();
+    }
+
+    private void installUnavailable(String message) {
+        if (availableAppUpdate != null) showAppUpdate(availableAppUpdate, message);
+        else notice("安装更新", message);
     }
 
     private LinearLayout settingsPage(String title, LinearLayout content, Runnable back) {
@@ -2726,6 +2854,53 @@ public final class MainActivity extends ComponentActivity {
     }
 
     private Sheet sheet(String heading, String symbol) { return new Sheet(heading, symbol); }
+
+    private final class UpdateDownload {
+        final AppUpdates.Release release;
+        final AppUpdateInstaller.Transfer transfer = new AppUpdateInstaller.Transfer();
+        final Sheet sheet;
+        final ProgressBar bar;
+        final TextView status;
+        boolean cancelled;
+        private long lastProgressAt;
+
+        UpdateDownload(AppUpdates.Release release) {
+            this.release = release;
+            sheet = updateSheet("下载 " + release.versionName());
+            sheet.dialog.setCancelable(false);
+            status = text("正在准备下载…", 14, MUTED, false);
+            add(sheet.body, status, W, 8);
+            bar = musicImportProgressBar();
+            bar.setIndeterminate(true);
+            bar.setMax(1000);
+            bar.setContentDescription("更新下载进度");
+            add(sheet.body, bar, 5, 8);
+            add(sheet.body, action("取消下载", false, () -> {
+                if (cancelled) return;
+                cancelled = true;
+                status.setText("正在取消下载…");
+                transfer.cancel();
+            }), 48, 14);
+        }
+
+        void progress(long bytes, long total) {
+            long now = SystemClock.elapsedRealtime();
+            if (lastProgressAt != 0 && now - lastProgressAt < 120 && bytes != total) return;
+            lastProgressAt = now;
+            main.post(() -> {
+                if (isDestroyed() || updateDownload != this || cancelled) return;
+                String received = Formatter.formatShortFileSize(MainActivity.this, bytes);
+                if (total <= 0) {
+                    bar.setIndeterminate(true);
+                    status.setText("已下载 " + received);
+                    return;
+                }
+                bar.setIndeterminate(false);
+                bar.setProgress((int) Math.min(1000, bytes * 1000.0 / total));
+                status.setText(received + " / " + Formatter.formatShortFileSize(MainActivity.this, total));
+            });
+        }
+    }
 
     private final class MusicDownloadProgress {
         final MusicImportTask task;

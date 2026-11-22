@@ -7,6 +7,7 @@ plugins {
 def danDanPlayAppId = providers.environmentVariable('ANON_TOOL_DANDANPLAY_APP_ID').getOrElse('').trim()
 def danDanPlayAppSecret = providers.environmentVariable('ANON_TOOL_DANDANPLAY_APP_SECRET').getOrElse('').trim()
 def updateGithubRepository = providers.environmentVariable('ANON_TOOL_GITHUB_REPOSITORY').getOrElse('').trim()
+def updateMirrorBase = providers.environmentVariable('ANON_TOOL_UPDATE_MIRROR_BASE').getOrElse('').trim()
 if (!updateGithubRepository.isEmpty() && !(updateGithubRepository ==~ '[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')) {
     throw new GradleException('ANON_TOOL_GITHUB_REPOSITORY must use the owner/repository format.')
 }
@@ -46,9 +47,10 @@ android {
         applicationId 'com.shengjian.player'
         minSdk 26
         targetSdk 35
-        versionCode 63
-        versionName '0.29.9'
+        versionCode 64
+        versionName '0.30.0'
         buildConfigField 'String', 'UPDATE_GITHUB_REPOSITORY', groovy.json.JsonOutput.toJson(updateGithubRepository)
+        buildConfigField 'String', 'UPDATE_MIRROR_BASE', groovy.json.JsonOutput.toJson(updateMirrorBase)
         buildConfigField 'String', 'DANDANPLAY_APP_ID', groovy.json.JsonOutput.toJson(danDanPlayAppId)
         buildConfigField 'String', 'DANDANPLAY_APP_SECRET', groovy.json.JsonOutput.toJson(danDanPlayAppSecret)
     }

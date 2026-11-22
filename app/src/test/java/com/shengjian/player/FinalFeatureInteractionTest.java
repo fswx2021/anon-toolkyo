@@ -2,8 +2,10 @@ package com.shengjian.player;
 
 import android.app.Application;
 import android.app.Dialog;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -27,6 +29,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
@@ -112,12 +115,16 @@ public class FinalFeatureInteractionTest {
         assertTrue(((View) entry.getParent().getParent()).performClick());
     }
 
-    @Test public void aboutOffersAnAvailableUpdateAndOpensItsDownload() throws Exception {
+    private static AppUpdates.Release availableUpdate() {
+        URI apk = URI.create("https://github.com/owner/anon-toolkyo/releases/download/v0.30.1/anon-toolkyo-0.30.1.apk");
+        return new AppUpdates.Release(BuildConfig.VERSION_CODE + 1, "0.30.1", apk,
+                "版本更新说明", "a".repeat(64), List.of(apk));
+    }
+
+    @Test public void aboutOffersInAppInstallationAndOpensTheReleaseWebsite() throws Exception {
         try (var controller = Robolectric.buildActivity(MainActivity.class).create()) {
             MainActivity host = controller.get();
-            String apk = "https://github.com/owner/anon-toolkyo/releases/download/v0.30.1/anon-toolkyo-0.30.1.apk";
-            field(MainActivity.class, "availableAppUpdate").set(host,
-                    new AppUpdates.Release(100, "0.30.1", URI.create(apk), "版本更新说明"));
+            field(MainActivity.class, "availableAppUpdate").set(host, availableUpdate());
             Method settings = MainActivity.class.getDeclaredMethod("showAppSettings");
             settings.setAccessible(true);
             settings.invoke(host);
@@ -126,10 +133,40 @@ public class FinalFeatureInteractionTest {
             assertTrue(label(about, "查看 0.30.1 更新").performClick());
             View update = ShadowDialog.getLatestDialog().getWindow().getDecorView();
             assertNotNull(label(update, "版本更新说明"));
-            assertTrue(label(update, "下载更新").performClick());
+            assertNotNull(label(update, "应用内下载并安装"));
+            assertTrue(label(update, "去网站下载").performClick());
             Intent next = shadowOf(host).getNextStartedActivity();
             assertEquals(Intent.ACTION_VIEW, next.getAction());
-            assertEquals(apk, next.getDataString());
+            assertEquals("https://github.com/owner/anon-toolkyo/releases/tag/v0.30.1", next.getDataString());
+        }
+    }
+
+    @Test public void startupUpdateWaitsForWindowFocusAndDoesNotRepeat() throws Exception {
+        Application app = RuntimeEnvironment.getApplication();
+        shadowOf(app).declareComponentUnbindable(new ComponentName(app, PlaybackService.class));
+        try (var controller = Robolectric.buildActivity(MainActivity.class)
+                .create().start().resume().postResume().visible()) {
+            MainActivity host = controller.get();
+            host.getSharedPreferences("app_settings", Application.MODE_PRIVATE)
+                    .edit().putInt("startup_update_check", 0).commit();
+            Method result = MainActivity.class.getDeclaredMethod("finishAppUpdateCheck",
+                    AppUpdates.Release.class, java.io.IOException.class);
+            result.setAccessible(true);
+            Field sheet = field(MainActivity.class, "updateSheet");
+            controller.windowFocusChanged(false);
+            result.invoke(host, availableUpdate(), null);
+            assertNull(sheet.get(host));
+
+            controller.windowFocusChanged(true);
+            assertNotNull(sheet.get(host));
+            View update = ShadowDialog.getLatestDialog().getWindow().getDecorView();
+            assertNotNull(label(update, "版本更新说明"));
+            assertTrue(label(update, "稍后").performClick());
+            shadowOf(Looper.getMainLooper()).idle();
+
+            controller.windowFocusChanged(true);
+            result.invoke(host, availableUpdate(), null);
+            assertNull(sheet.get(host));
         }
     }
 

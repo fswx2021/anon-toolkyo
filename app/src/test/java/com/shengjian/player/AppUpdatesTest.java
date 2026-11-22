@@ -30,6 +30,9 @@ public class AppUpdatesTest {
     private static final String ASSETS = "https://github.com/" + REPO + "/releases/download/v0.29.10/";
     private static final String APK_NAME = "anon-toolkyo-0.29.10.apk";
     private static final String APK = ASSETS + APK_NAME;
+    private static final String ASSET_API = "https://api.github.com/repos/" + REPO + "/releases/assets/";
+    private static final String MIRROR = "https://updates.example.org/anon/";
+    private static final String MIRROR_APK = MIRROR + "v0.29.10/" + APK_NAME;
     private static final String DIGEST = "0123456789abcdef".repeat(4);
 
     @Test public void usesPinnedReleaseAssetsAndOrdersUpdatesByVersionCode() throws Exception {
@@ -45,6 +48,9 @@ public class AppUpdatesTest {
         assertEquals(List.of(API, ASSETS + "update.json"), calls);
         assertEquals("0.29.10", latest.versionName());
         assertEquals(URI.create(APK), latest.apkUrl());
+        assertEquals(List.of(URI.create(APK)), latest.downloadUrls());
+        assertEquals(DIGEST, latest.sha256());
+        assertEquals(URI.create("https://github.com/" + REPO + "/releases/tag/v0.29.10"), latest.websiteUrl());
         assertEquals("更新说明", latest.notes());
         assertTrue(latest.newerThan(69));
         assertFalse(latest.newerThan(70));
@@ -92,12 +98,69 @@ public class AppUpdatesTest {
                 "https://user@release-assets.githubusercontent.com/object"));
     }
 
-    @Test public void limitsAutomaticChecksToOncePerDayAndToleratesClockCorrection() {
-        long last = 4_000;
-        assertFalse(AppUpdates.due(last + AppUpdates.CHECK_INTERVAL_MS - 1, last));
-        assertTrue(AppUpdates.due(last + AppUpdates.CHECK_INTERVAL_MS, last));
-        assertTrue(AppUpdates.due(last - 1, last));
-        assertTrue(AppUpdates.due(last, 0));
+    @Test public void prefersOfficialAssetApisEvenWhenTheWebsiteCannotBeReached() throws Exception {
+        JSONObject release = new JSONObject(release(ASSETS + "update.json", false, DIGEST));
+        release.getJSONArray("assets").getJSONObject(0).put("id", 500);
+        release.getJSONArray("assets").getJSONObject(1).put("id", 501);
+        String body = manifest(APK, 70);
+        List<URI> calls = new ArrayList<>();
+        AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
+            calls.add(address);
+            if (!asset) return response(release.toString());
+            if (address.equals(URI.create(ASSET_API + "500"))) return response(body);
+            throw new IOException("The website is not reachable");
+        });
+        AppUpdates.Release latest = updates.latest();
+        assertEquals(List.of(URI.create(API), URI.create(ASSET_API + "500")), calls);
+        assertEquals(List.of(URI.create(ASSET_API + "501"), URI.create(APK)), latest.downloadUrls());
+
+        AppUpdates legacy = new AppUpdates(REPO, (address, limit, asset) -> {
+            if (!asset) return response(release.toString());
+            if (address.equals(URI.create(ASSET_API + "500"))) return response("{\"id\":500}");
+            return response(body);
+        });
+        assertEquals(latest, legacy.latest());
+    }
+
+    @Test public void usesPinnedMirrorWhenGitHubIsUnavailableAndKeepsCanonicalFallback() throws Exception {
+        List<String> calls = new ArrayList<>();
+        String mirrorManifest = manifest(MIRROR_APK, 70);
+        AppUpdates updates = new AppUpdates(REPO, MIRROR, (address, limit, asset) -> {
+            calls.add(address.toString());
+            if (address.toString().equals(MIRROR + "update.json")) return response(mirrorManifest);
+            throw new IOException("GitHub is not reachable");
+        });
+        AppUpdates.Release latest = updates.latest();
+        assertEquals(List.of(API, LATEST_MANIFEST, MIRROR + "update.json"), calls);
+        assertEquals(URI.create(MIRROR_APK), latest.websiteUrl());
+        assertEquals(List.of(URI.create(MIRROR_APK), URI.create(APK)), latest.downloadUrls());
+
+        String originalManifest = manifest(APK, 70);
+        String originalRelease = release(ASSETS + "update.json", false, DIGEST);
+        AppUpdates reachable = new AppUpdates(REPO, MIRROR, (address, limit, asset) -> {
+            assertFalse(address.toString().startsWith(MIRROR));
+            return response(asset ? originalManifest : originalRelease);
+        });
+        assertEquals(List.of(URI.create(APK), URI.create(MIRROR_APK)), reachable.latest().downloadUrls());
+    }
+
+    @Test public void rejectsInvalidMirrorBasesAndForeignApksOrRedirects() throws Exception {
+        assertFalse(new AppUpdates("", "http://updates.example.org/anon/").configured());
+        assertFalse(new AppUpdates("", MIRROR + "../").configured());
+        assertFalse(new AppUpdates("", MIRROR + "?some=param").configured());
+        assertFalse(new AppUpdates("", "https://updates.example.org/anon").configured());
+        for (String apk : List.of(APK, MIRROR_APK.replace("/anon/", "/other/"), MIRROR_APK + "?q=1")) {
+            String manifest = manifest(apk, 70);
+            AppUpdates injected = new AppUpdates("", MIRROR, (address, limit, asset) -> response(manifest));
+            assertThrows(IOException.class, injected::latest);
+        }
+        URI mirrorApk = URI.create(MIRROR_APK);
+        String cdn = "https://release-assets.githubusercontent.com/object";
+        assertThrows(IOException.class, () -> AppUpdates.apkRedirect(mirrorApk, mirrorApk, cdn));
+        assertEquals(URI.create(cdn), AppUpdates.apkRedirect(URI.create(APK), URI.create(APK), cdn));
+        URI api = URI.create(ASSET_API + "501");
+        assertEquals(URI.create(cdn), AppUpdates.apkRedirect(api, api, cdn));
+        assertThrows(IOException.class, () -> AppUpdates.apkRedirect(URI.create(APK), URI.create(MIRROR_APK), cdn));
     }
 
     @Test public void readsThePinnedLatestManifestWhenApiAccessFails() throws Exception {

@@ -42,13 +42,22 @@ def config_version():
     return names[0], int(codes[0])
 
 
-def build_environment(repository):
+def mirror_base(value):
+    value = value.strip()
+    if value and (not re.fullmatch(r"https://[A-Za-z0-9.-]+/(?:[A-Za-z0-9._~-]+/)*", value)
+                  or any(segment in {".", ".."} for segment in value.split("/"))):
+        raise ValueError("The update mirror must be an HTTPS directory URL ending in /.")
+    return value
+
+
+def build_environment(repository, mirror):
     env = os.environ.copy()
     for name in ("DANDANPLAY_APP_ID", "DANDANPLAY_APP_SECRET", "DANDANAPI_APPID",
                  "DANDANAPI_KEY", "KAZUMI_APPID", "KAZUMI_KEY", "ORG_GRADLE_PROJECT_dart-defines",
                  "GH_TOKEN", "GITHUB_TOKEN"):
         env.pop(name, None)
     env["ANON_TOOL_GITHUB_REPOSITORY"] = repository
+    env["ANON_TOOL_UPDATE_MIRROR_BASE"] = mirror
     env.setdefault("CI", "true")
     env.setdefault("FLUTTER_SUPPRESS_ANALYTICS", "true")
     for variable, cache in (("ANDROID_HOME", "android-sdk"), ("FLUTTER_ROOT", "flutter-sdk"),
@@ -158,7 +167,7 @@ def build(env, cached_gradle, min_tests):
     return ROOT / APK
 
 
-def verify(apk, previous, tools, env, version, code, repository):
+def verify(apk, previous, tools, env, version, code, repository, mirror):
     if not apk.is_file():
         raise ValueError(f"APK does not exist: {apk}")
     previous_arg = ["--previous", previous] if previous else []
@@ -173,9 +182,11 @@ def verify(apk, previous, tools, env, version, code, repository):
         bad_file = package.testzip()
         if bad_file:
             raise ValueError(f"APK checksum failed for entry {bad_file}.")
-        if not any(repository.encode("ascii") in package.read(entry)
-                   for entry in package.namelist() if re.fullmatch(r"classes\d*\.dex", entry)):
+        dex_files = [entry for entry in package.namelist() if re.fullmatch(r"classes\d*\.dex", entry)]
+        if not any(repository.encode("ascii") in package.read(entry) for entry in dex_files):
             raise ValueError("APK does not contain the configured GitHub update repository.")
+        if mirror and not any(mirror.encode("ascii") in package.read(entry) for entry in dex_files):
+            raise ValueError("APK does not contain the configured update mirror.")
     print(identity)
 
 
@@ -230,9 +241,25 @@ def check_draft_source(repository, tag):
     return github
 
 
+def assemble_mirror(directory, tag, apk_name, mirror):
+    manifest = json.loads((directory / "update.json").read_text(encoding="utf-8"))
+    manifest["apkUrl"] = f"{mirror}{tag}/{apk_name}"
+    target = directory / "mirror"
+    version = target / tag
+    version.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(directory / apk_name, version / apk_name)
+    if sha256(version / apk_name) != manifest["sha256"]:
+        raise ValueError("APK changed while assembling mirror assets.")
+    (target / "update.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                                        encoding="utf-8")
+    print(f"HTTPS mirror assets: {target}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", default=os.environ.get("ANON_TOOL_GITHUB_REPOSITORY"), help="GitHub OWNER/REPO")
+    parser.add_argument("--mirror-base", default=os.environ.get("ANON_TOOL_UPDATE_MIRROR_BASE", ""),
+                        help="optional owner-controlled HTTPS update directory ending in /")
     parser.add_argument("--notes-file", type=Path, help="UTF-8 release notes, default tools/releases/<version>.md")
     signing = parser.add_mutually_exclusive_group(required=True)
     signing.add_argument("--previous", type=Path, help="last distributed APK for checking covering upgrades")
@@ -253,19 +280,22 @@ def main():
         parser.error("--minimum-tests must be greater than zero")
     if args.previous and not args.previous.is_file():
         parser.error("--previous must point to the last distributed APK")
+    mirror = mirror_base(args.mirror_base)
     version, code = config_version()
     path = args.notes_file or ROOT / f"tools/releases/{version}.md"
     notes = path.read_text(encoding="utf-8-sig").strip()
     if not notes or len(notes.encode("utf-16-le")) > 4000:
         parser.error("--notes-file must contain 1 to 2000 UTF-16 code units")
     github = check_draft_source(repository, f"v{version}") if args.create_draft else None
-    env = build_environment(repository)
+    env = build_environment(repository, mirror)
     tools = build_tools(args.build_tools, env)
     cached_gradle = find_cached_gradle(env) if args.use_cache else args.cached_gradle
     apk = args.apk.resolve() if args.apk else build(env, cached_gradle, args.minimum_tests)
     previous = args.previous.resolve() if args.previous else None
-    verify(apk, previous, tools, env, version, code, repository)
+    verify(apk, previous, tools, env, version, code, repository, mirror)
     tag, directory, name = assemble_assets(apk, repository, version, code, notes)
+    if mirror:
+        assemble_mirror(directory, tag, name, mirror)
     if github:
         github.create_draft(tag, f"anon toolkyo {version}", notes,
                             [directory / name, directory / "update.json", directory / "SHA256SUMS.txt"])

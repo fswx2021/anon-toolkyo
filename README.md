@@ -27,7 +27,7 @@ Android 应用，包含音乐、漫画、小说和动画。四个栏目共用 AN
 
 首页右上角「设置」包含外观、默认启动页、下载与存储、备份与恢复、快速上手和关于与数据。轻量 ZIP 备份包含索引、设置、进度及歌词等资料。完整备份还包括音乐文件、本地作品和离线章节。恢复流程先通过系统文件选择器验证备份，选择退出后重新打开应用即可应用恢复。 [Android 文件选择器](https://developer.android.com/training/data-storage/shared/documents-files)
 
-正式版启动时最多每天检查一次 GitHub 更新，可在设置关闭，也可点「设置 → 关于与数据 → 检查更新」。GitHub API 暂时不可访问时，可通过最新正式版的公开附件检查更新。选择下载后，浏览器获取 APK，安装由 Android 确认。首次使用此功能时请先手动安装 0.29.8 或更新版。
+正式版启动时会检查更新，发现新版时显示更新说明。可在设置关闭启动检查，也可点「设置 → 关于与数据 → 检查更新」。选择「应用内下载并安装」可以查看进度，校验后的 APK 由 Android 确认安装。首次使用时，Android 可能要求允许此应用安装未知来源应用。「去网站下载」也可打开 GitHub 发布页。首次使用应用内安装，请先安装 0.30.0 或更新版。
 
 在「设置 → 帮助 → 开源声明」可离线阅读第三方许可证，并找到各组件的上游源码与素材署名。Kazumi 集成所用的版本、修改和构建脚本在工程的 `integration/kazumi/`。
 
@@ -159,6 +159,8 @@ python tools/release_android.py --repository fswx2021/anon-toolkyo --previous "�
 ```
 
 这台 Windows 电脑可以加上 `--use-cache` 使用已有的离线构建环境。按上述目录命名更新说明时，工具会自动找到对应文件。
+
+默认的更新渠道为 GitHub，程序可尝试其多个官方入口。要为 GitHub 难以直连的网络提供另一条渠道，可在打包时指定 `--mirror-base https://你的域名/updates/`。将镜像输出目录中的版本路径先上传，然后更新其根目录的 `update.json`。镜像应通过该 HTTPS 地址直接返回文件，APK 仍使用同一签名。
 
 提交源码后，推送对应的 `v版本号` Git 标签。再次运行时传入 `--apk "build/releases/v新版本/anon-toolkyo-新版本.apk" --create-draft`，并保留上面的仓库、上一版和说明参数，即可用已登录的 Git Credential Manager 创建发布草稿。检查三个附件完整后发布为正式版。
 
