@@ -11,24 +11,32 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-POWERSHELL_UPLOAD = r"""
+POWERSHELL_REQUEST = r"""
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $headers = @{
-    Authorization = ('Bearer ' + $env:ANON_RELEASE_UPLOAD_TOKEN)
+    Authorization = ('Bearer ' + $env:ANON_RELEASE_REQUEST_TOKEN)
     Accept = 'application/vnd.github+json'
     'X-GitHub-Api-Version' = '2022-11-28'
 }
-$upload = @{
-    Uri = $env:ANON_RELEASE_UPLOAD_URL
-    Method = 'Post'
+$request = @{
+    Uri = $env:ANON_RELEASE_REQUEST_URL
+    Method = $env:ANON_RELEASE_REQUEST_METHOD
     Headers = $headers
-    InFile = $env:ANON_RELEASE_UPLOAD_FILE
-    ContentType = $env:ANON_RELEASE_UPLOAD_TYPE
+    UserAgent = 'anon-toolkyo-release'
     MaximumRedirection = 0
     TimeoutSec = 240
 }
-$result = Invoke-RestMethod @upload
-$result | ConvertTo-Json -Depth 8 -Compress
+if ($env:ANON_RELEASE_REQUEST_FILE) {
+    $request.InFile = $env:ANON_RELEASE_REQUEST_FILE
+} elseif ($env:ANON_RELEASE_REQUEST_BODY) {
+    $request.Body = $env:ANON_RELEASE_REQUEST_BODY
+}
+if ($env:ANON_RELEASE_REQUEST_TYPE) {
+    $request.ContentType = $env:ANON_RELEASE_REQUEST_TYPE
+}
+$result = Invoke-RestMethod @request
+ConvertTo-Json -InputObject $result -Depth 8 -Compress
 """
 
 
@@ -73,10 +81,29 @@ class GitHubRelease:
     def __init__(self, repository, cwd):
         self.token = credential(repository, cwd)
         self.repository = f"/repos/{repository}"
+        self.powershell = shutil.which("pwsh") if os.name == "nt" else None
         self.http = build_opener(NoRedirect())
 
+    def windows_request(self, url, method, *, body="", file="", content_type=""):
+        # Use the Windows HTTPS client with its system trust store and proxy.
+        environment = dict(os.environ, ANON_RELEASE_REQUEST_TOKEN=self.token,
+                           ANON_RELEASE_REQUEST_URL=url, ANON_RELEASE_REQUEST_METHOD=method,
+                           ANON_RELEASE_REQUEST_BODY=body, ANON_RELEASE_REQUEST_FILE=file,
+                           ANON_RELEASE_REQUEST_TYPE=content_type)
+        response = subprocess.run(
+            [self.powershell, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_REQUEST],
+            env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if response.returncode:
+            raise ValueError(f"GitHub {method} request failed. Rerun to resume the draft.")
+        return json.loads(response.stdout)
+
     def request(self, host, route, *, method="GET", data=None, headers=None):
-        request = Request(f"https://{host}{self.repository}{route}", data=data, method=method, headers={
+        url = f"https://{host}{self.repository}{route}"
+        if self.powershell and host == "api.github.com":
+            return self.windows_request(url, method, body=data.decode("utf-8") if data else "",
+                                        content_type=(headers or {}).get("Content-Type", ""))
+        request = Request(url, data=data, method=method, headers={
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -108,19 +135,9 @@ class GitHubRelease:
         query = urlencode({"name": path.name})
         route = f"/releases/{release_id}/assets?{query}"
         content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
-        powershell = shutil.which("pwsh") if os.name == "nt" else None
-        if powershell:
-            # PowerShell uses the system HTTPS client and proxy for large APK uploads.
-            environment = dict(os.environ, ANON_RELEASE_UPLOAD_TOKEN=self.token,
-                               ANON_RELEASE_UPLOAD_URL=f"https://uploads.github.com{self.repository}{route}",
-                               ANON_RELEASE_UPLOAD_FILE=str(path.resolve()), ANON_RELEASE_UPLOAD_TYPE=content_type)
-            response = subprocess.run(
-                [powershell, "-NoProfile", "-NonInteractive", "-Command", POWERSHELL_UPLOAD],
-                env=environment, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            )
-            if response.returncode:
-                raise ValueError(f"GitHub asset upload failed: {path.name}. Rerun to resume the draft.")
-            return json.loads(response.stdout)
+        if self.powershell:
+            return self.windows_request(f"https://uploads.github.com{self.repository}{route}", "POST",
+                                        file=str(path.resolve()), content_type=content_type)
         with path.open("rb") as stream:
             return self.request("uploads.github.com", route, method="POST",
                                 data=stream, headers={
