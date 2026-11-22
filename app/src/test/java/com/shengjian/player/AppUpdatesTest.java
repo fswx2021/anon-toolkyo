@@ -25,6 +25,8 @@ import static org.junit.Assert.assertTrue;
 public class AppUpdatesTest {
     private static final String REPO = "owner/anon-toolkyo";
     private static final String API = "https://api.github.com/repos/" + REPO + "/releases/latest";
+    private static final String LATEST_MANIFEST = "https://github.com/" + REPO
+            + "/releases/latest/download/update.json";
     private static final String ASSETS = "https://github.com/" + REPO + "/releases/download/v0.29.10/";
     private static final String APK_NAME = "anon-toolkyo-0.29.10.apk";
     private static final String APK = ASSETS + APK_NAME;
@@ -36,7 +38,7 @@ public class AppUpdatesTest {
         String manifest = manifest(APK, 70);
         AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
             calls.add(address.toString());
-            return asset ? manifest : release;
+            return response(asset ? manifest : release);
         });
 
         AppUpdates.Release latest = updates.latest();
@@ -54,7 +56,7 @@ public class AppUpdatesTest {
                 false, DIGEST);
         AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
             assertFalse(asset);
-            return release;
+            return response(release);
         });
         assertThrows(IOException.class, updates::latest);
     }
@@ -71,7 +73,7 @@ public class AppUpdatesTest {
         String prerelease = release(ASSETS + "update.json", true, DIGEST);
         AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
             assertFalse(asset);
-            return prerelease;
+            return response(prerelease);
         });
         assertNull(updates.latest());
         assertFalse(new AppUpdates("").configured());
@@ -98,8 +100,58 @@ public class AppUpdatesTest {
         assertTrue(AppUpdates.due(last, 0));
     }
 
+    @Test public void readsThePinnedLatestManifestWhenApiAccessFails() throws Exception {
+        List<String> calls = new ArrayList<>();
+        String manifest = manifest(APK, 70);
+        AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
+            calls.add(address.toString());
+            if (!asset) throw new IOException("HTTP 403");
+            return new AppUpdates.Response(manifest, "0.29.10");
+        });
+        AppUpdates.Release latest = updates.latest();
+        assertEquals(List.of(API, LATEST_MANIFEST), calls);
+        assertEquals(URI.create(APK), latest.apkUrl());
+        assertTrue(latest.newerThan(69));
+
+        String foreignApk = manifest(APK.replace("/owner/", "/other/"), 70);
+        AppUpdates foreign = new AppUpdates(REPO, (address, limit, asset) -> {
+            if (!asset) throw new IOException("HTTP 403");
+            return new AppUpdates.Response(foreignApk, "0.29.10");
+        });
+        assertThrows(IOException.class, foreign::latest);
+
+        AppUpdates wrongTag = new AppUpdates(REPO, (address, limit, asset) -> {
+            if (!asset) throw new IOException("HTTP 403");
+            return new AppUpdates.Response(manifest, "0.29.9");
+        });
+        assertThrows(IOException.class, wrongTag::latest);
+    }
+
+    @Test public void latestManifestRedirectAllowsOnlyAnOfficialCdnOrTheSameRepositoryManifest() throws Exception {
+        URI original = URI.create(LATEST_MANIFEST);
+        String sameManifest = ASSETS + "update.json";
+        assertEquals(new AppUpdates.ManifestRedirect(URI.create(sameManifest), "0.29.10"),
+                AppUpdates.latestManifestRedirect(original, URI.create(sameManifest).getRawPath()));
+        String cdn = "https://release-assets.githubusercontent.com/object?signature=value";
+        assertEquals(new AppUpdates.ManifestRedirect(URI.create(cdn), null),
+                AppUpdates.latestManifestRedirect(original, cdn));
+        assertThrows(IOException.class, () -> AppUpdates.latestManifestRedirect(
+                original, sameManifest.replace("/owner/", "/other/")));
+        assertThrows(IOException.class, () -> AppUpdates.latestManifestRedirect(
+                original, sameManifest.replace("v0.29.10", "v0.29.10-beta")));
+        assertThrows(IOException.class, () -> AppUpdates.latestManifestRedirect(original, APK));
+        assertThrows(IOException.class, () -> AppUpdates.latestManifestRedirect(
+                original, sameManifest + "?redirect=external"));
+        assertThrows(IOException.class, () -> AppUpdates.latestManifestRedirect(
+                original, cdn.replace(".com/", ".com.example.org/")));
+    }
+
     private static AppUpdates catalog(String release, String manifest) {
-        return new AppUpdates(REPO, (address, limit, asset) -> asset ? manifest : release);
+        return new AppUpdates(REPO, (address, limit, asset) -> response(asset ? manifest : release));
+    }
+
+    private static AppUpdates.Response response(String body) {
+        return new AppUpdates.Response(body, null);
     }
 
     private static String release(String manifestUrl, boolean prerelease, String apkDigest) throws Exception {

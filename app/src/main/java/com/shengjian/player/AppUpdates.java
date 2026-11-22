@@ -19,14 +19,19 @@ final class AppUpdates {
     private static final int MANIFEST_LIMIT = 32 * 1024;
     private static final int TIMEOUT_MS = 8_000;
     private static final String MANIFEST = "update.json";
+    private static final String LATEST_MANIFEST_PATH = "/releases/latest/download/" + MANIFEST;
+    private static final String RELEASE_ASSET_PATH = "/releases/download/";
     private static final Pattern REPOSITORY = Pattern.compile(
             "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}");
     private static final Pattern VERSION = Pattern.compile("[0-9]{1,9}(?:\\.[0-9]{1,9}){2}");
     private static final Pattern SHA256 = Pattern.compile("[a-fA-F0-9]{64}");
 
     interface Fetch {
-        String get(URI address, int limit, boolean asset) throws IOException;
+        Response get(URI address, int limit, boolean asset) throws IOException;
     }
+
+    record Response(String body, String versionFromRedirect) { }
+    record ManifestRedirect(URI url, String version) { }
 
     record Release(int versionCode, String versionName, URI apkUrl, String notes) {
         boolean newerThan(int installedVersionCode) { return versionCode > installedVersionCode; }
@@ -55,11 +60,17 @@ final class AppUpdates {
 
     Release latest() throws IOException {
         if (!configured()) throw new IOException("当前安装包未设置更新仓库");
-        String latest = fetch.get(URI.create("https://api.github.com/repos/" + repository + "/releases/latest"),
-                RELEASE_LIMIT, false);
+        Response latest;
+        try {
+            latest = fetch.get(URI.create("https://api.github.com/repos/" + repository + "/releases/latest"),
+                    RELEASE_LIMIT, false);
+        } catch (IOException apiUnavailable) {
+            if (Thread.currentThread().isInterrupted()) throw apiUnavailable;
+            return latestManifest();
+        }
         if (latest == null) return null;
         try {
-            JSONObject release = new JSONObject(latest);
+            JSONObject release = new JSONObject(latest.body());
             String tag = release.getString("tag_name");
             if (release.optBoolean("draft") || release.optBoolean("prerelease")
                     || !tag.startsWith("v") || !VERSION.matcher(tag.substring(1)).matches()) return null;
@@ -72,18 +83,35 @@ final class AppUpdates {
             if (apkAsset == null) throw invalidRelease();
 
             URI manifest = assetUrl(manifestAsset.getString("browser_download_url"), tag, MANIFEST);
-            URI apk = assetUrl(apkAsset.getString("browser_download_url"), tag, apkName);
-            String body = fetch.get(manifest, MANIFEST_LIMIT, true);
-            if (body == null) throw invalidRelease();
+            assetUrl(apkAsset.getString("browser_download_url"), tag, apkName);
+            Response response = fetch.get(manifest, MANIFEST_LIMIT, true);
+            if (response == null) throw invalidRelease();
+            return parseManifest(response.body(), versionName, apkAsset.optString("digest", ""));
+        } catch (JSONException malformed) {
+            throw invalidRelease();
+        }
+    }
+
+    private Release latestManifest() throws IOException {
+        URI address = URI.create("https://github.com/" + repository + LATEST_MANIFEST_PATH);
+        Response response = fetch.get(address, MANIFEST_LIMIT, true);
+        if (response == null) return null;
+        return parseManifest(response.body(), response.versionFromRedirect(), "");
+    }
+
+    private Release parseManifest(String body, String expectedVersion, String registeredDigest) throws IOException {
+        try {
             JSONObject descriptor = new JSONObject(body);
             Object number = descriptor.get("versionCode");
+            String versionName = descriptor.getString("versionName");
             if (!(number instanceof Integer versionCode) || versionCode <= 0
-                    || !versionName.equals(descriptor.getString("versionName"))
-                    || !apk.equals(assetUrl(descriptor.getString("apkUrl"), tag, apkName))) {
+                    || !VERSION.matcher(versionName).matches()
+                    || (expectedVersion != null && !expectedVersion.equals(versionName))) {
                 throw invalidRelease();
             }
+            URI apk = assetUrl(descriptor.getString("apkUrl"), "v" + versionName,
+                    "anon-toolkyo-" + versionName + ".apk");
             String sha256 = descriptor.getString("sha256");
-            String registeredDigest = apkAsset.optString("digest", "");
             if (!SHA256.matcher(sha256).matches()
                     || (!registeredDigest.isEmpty() && !"null".equals(registeredDigest)
                         && !("sha256:" + sha256).equalsIgnoreCase(registeredDigest))) {
@@ -118,9 +146,10 @@ final class AppUpdates {
         return new IOException("发布信息不完整或校验不一致");
     }
 
-    private static String request(URI address, int limit, boolean asset) throws IOException {
+    private static Response request(URI address, int limit, boolean asset) throws IOException {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(TIMEOUT_MS);
         URI current = address;
+        String manifestVersion = null;
         for (int redirects = 0; redirects <= 2; redirects++) {
             HttpURLConnection connection = (HttpURLConnection) current.toURL().openConnection();
             connection.setInstanceFollowRedirects(false);
@@ -131,8 +160,15 @@ final class AppUpdates {
             try {
                 int status = connection.getResponseCode();
                 if (status == HttpURLConnection.HTTP_NOT_FOUND) return null;
-                if (asset && (status == 302 || status == 303 || status == 307 || status == 308)) {
-                    current = releaseAssetRedirect(connection.getHeaderField("Location"));
+                if (asset && (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)) {
+                    String location = connection.getHeaderField("Location");
+                    if (redirects == 0 && address.getRawPath().endsWith(LATEST_MANIFEST_PATH)) {
+                        ManifestRedirect redirect = latestManifestRedirect(address, location);
+                        current = redirect.url();
+                        manifestVersion = redirect.version();
+                    } else {
+                        current = releaseAssetRedirect(location);
+                    }
                     continue;
                 }
                 if (status == 403 || status == 429) throw new IOException("更新服务暂时限制了访问，请稍后再试");
@@ -146,7 +182,7 @@ final class AppUpdates {
                         if (bytes.size() + count > limit) throw invalidRelease();
                         bytes.write(buffer, 0, count);
                     }
-                    return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
+                    return new Response(new String(bytes.toByteArray(), StandardCharsets.UTF_8), manifestVersion);
                 }
             } finally {
                 connection.disconnect();
@@ -162,14 +198,38 @@ final class AppUpdates {
         return (int) remaining;
     }
 
-    static URI releaseAssetRedirect(String location) throws IOException {
-        if (location == null) throw invalidRelease();
-        URI redirect;
+    private static URI redirectUri(String location) throws IOException {
         try {
-            redirect = URI.create(location);
+            if (location == null) throw invalidRelease();
+            return URI.create(location);
         } catch (IllegalArgumentException malformed) {
             throw invalidRelease();
         }
+    }
+
+    static ManifestRedirect latestManifestRedirect(URI original, String location) throws IOException {
+        URI redirect = original.resolve(redirectUri(location));
+        if ("github.com".equalsIgnoreCase(redirect.getHost())) {
+            String path = original.getRawPath();
+            String repoPath = path.substring(0, path.length() - LATEST_MANIFEST_PATH.length());
+            String prefix = repoPath + RELEASE_ASSET_PATH;
+            String target = redirect.getRawPath();
+            String suffix = "/" + MANIFEST;
+            if (!"https".equalsIgnoreCase(redirect.getScheme())
+                    || redirect.getUserInfo() != null || redirect.getPort() != -1
+                    || redirect.getRawQuery() != null || redirect.getFragment() != null
+                    || !target.regionMatches(true, 0, prefix, 0, prefix.length())
+                    || !target.endsWith(suffix)
+                    || target.length() <= prefix.length() + suffix.length()) throw invalidRelease();
+            String tag = target.substring(prefix.length(), target.length() - suffix.length());
+            if (!tag.startsWith("v") || !VERSION.matcher(tag.substring(1)).matches()) throw invalidRelease();
+            return new ManifestRedirect(redirect, tag.substring(1));
+        }
+        return new ManifestRedirect(releaseAssetRedirect(location), null);
+    }
+
+    static URI releaseAssetRedirect(String location) throws IOException {
+        URI redirect = redirectUri(location);
         String host = redirect.getHost();
         if (!"https".equalsIgnoreCase(redirect.getScheme())
                 || (!"release-assets.githubusercontent.com".equalsIgnoreCase(host)
