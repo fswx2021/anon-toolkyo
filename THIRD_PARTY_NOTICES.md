@@ -10,4 +10,4 @@ anon toolkyo 的项目代码采用 GNU GPL 第 3 版。各第三方组件仍适�
 - **AndroidX、Jetpack Compose 和 Gradle Wrapper** 采用 Apache 2.0 许可。**Android Java NIO 兼容库 2.1.5** 采用 GNU GPL 第 2 版并附 Classpath 例外。Flutter 及 Dart 依赖的许可汇总随安装包提供。 [AndroidX 源码](https://android.googlesource.com/platform/frameworks/support/) · [NIO 兼容库源码](https://github.com/google/desugar_jdk_libs/tree/73170c345e6a762fc6a1f0301bb15218850023ef) · [Flutter 源码](https://github.com/flutter/flutter)
 - Windows 源规则调试器使用 **TwelveMonkeys ImageIO 3.12.0** 和 **JSON-java 20260814**。BSD 3 条款及公有领域声明原文见 `desktop/licenses/`。 [TwelveMonkeys 对应版本与许可](https://github.com/haraldk/TwelveMonkeys/blob/twelvemonkeys-3.12.0/LICENSE.txt) · [JSON-java 对应版本与许可](https://github.com/stleary/JSON-java/blob/20260814/LICENSE)
 
-公开版内置的图标、状态插图和离线番剧封面是本项目绘制的唱片、拨片和几何图案。资源可用 Pillow 重新生成，绘图代码位于 `tools/generate_public_art.py`。联网番剧图片由 Bangumi 提供，图片权利归各自权利方。 [Bangumi](https://bangumi.tv/)
+首页头像和应用图标使用项目维护者提供的 Q 版头像。状态插图、播放器占位图和离线番剧封面由本项目绘制，可用 `tools/generate_public_art.py` 重新生成。联网番剧图片由 Bangumi 提供，图片权利归各自权利方。 [Bangumi](https://bangumi.tv/)

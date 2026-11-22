@@ -38,5 +38,6 @@ Apache License 2.0 见本目录 androidx-apache-2.0.txt。组件特有的声明�
 
 Flutter 和其软件包的声明汇总见 APK 的 assets/flutter_assets/NOTICES.Z，可在应用的开源声明里离线查看。
 
-公开版图标、状态插图和离线番剧封面由本项目绘制。
+首页头像和应用图标使用项目维护者提供的 Q 版头像。
+状态插图、播放器占位图和离线番剧封面由本项目绘制。
 联网番剧封面由 Bangumi 提供，图片权利归各自权利方。

@@ -70,13 +70,14 @@ def save(image, path, width, height):
 
 
 def make_emblem():
-    image, draw = canvas(432, 432, "#f9dce9")
-    draw.rounded_rectangle(box(73, 73, 359, 359), radius=68 * SCALE, fill=CREAM)
-    disc(draw, 202, 214, 94)
-    pick(draw, 273, 260, 53, PINK)
-    sparkle(draw, 273, 255, 16, CREAM)
-    sparkle(draw, 289, 139, 18, PINK)
-    save(image, ART / "anon_avatar.png", 432, 432)
+    if not (ART / "anon_avatar.jpg").is_file():
+        image, draw = canvas(432, 432, "#f9dce9")
+        draw.rounded_rectangle(box(73, 73, 359, 359), radius=68 * SCALE, fill=CREAM)
+        disc(draw, 202, 214, 94)
+        pick(draw, 273, 260, 53, PINK)
+        sparkle(draw, 273, 255, 16, CREAM)
+        sparkle(draw, 289, 139, 18, PINK)
+        save(image, ART / "anon_avatar.png", 432, 432)
 
     image, draw = canvas(400, 400, None)
     draw.rounded_rectangle(box(36, 36, 364, 364), radius=32 * SCALE, fill=CREAM)
