@@ -1,0 +1,670 @@
+diff --git a/lib/pages/info/info_page.dart b/lib/pages/info/info_page.dart
+--- a/lib/pages/info/info_page.dart
++++ b/lib/pages/info/info_page.dart
+@@ -1,18 +1,12 @@
+-import 'dart:io';
+-import 'dart:ui';
+ 
+ import 'package:flutter/material.dart';
++import 'package:kazumi/anon/anon_subject_page.dart';
+ import 'package:flutter_mobx/flutter_mobx.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+-import 'package:window_manager/window_manager.dart';
+-
+-import 'package:kazumi/bean/appbar/drag_to_move_bar.dart' as dtb;
+-import 'package:kazumi/bean/card/bangumi_info_card.dart';
+-import 'package:kazumi/bean/card/network_img_layer.dart';
++
+ import 'package:kazumi/bean/dialog/adaptive_bottom_sheet.dart';
+ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/bean/widget/collect_button.dart';
+-import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
+ import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+ import 'package:kazumi/pages/info/info_actions_menu.dart';
+ import 'package:kazumi/pages/info/info_controller.dart';
+@@ -21,9 +15,7 @@
+ import 'package:kazumi/pages/info/source_sheet.dart';
+ import 'package:kazumi/plugins/plugins_controller.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+-import 'package:kazumi/services/platform/desktop_window_config.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+-import 'package:kazumi/utils/device.dart';
+ 
+ class InfoPage extends StatefulWidget {
+   const InfoPage({
+@@ -329,115 +321,16 @@
+ 
+   @override
+   Widget build(BuildContext context) {
+-    final showWindowButton = DesktopWindowConfig.showWindowButton;
+-    final topOffset = Platform.isMacOS && showWindowButton ? 22.0 : 0.0;
+-    return Scaffold(
+-      body: NestedScrollView(
+-        headerSliverBuilder: (BuildContext context, bool innerBoxIsScrolled) {
+-          return <Widget>[
+-            SliverOverlapAbsorber(
+-              handle: NestedScrollView.sliverOverlapAbsorberHandleFor(context),
+-              sliver: SliverAppBar.medium(
+-                title: EmbeddedNativeControlArea(
+-                  child: dtb.DragToMoveArea(
+-                    child: Container(
+-                      width: double.infinity,
+-                      alignment: Alignment.centerLeft,
+-                      child: Text(
+-                        infoController.bangumiItem.nameCn == ''
+-                            ? infoController.bangumiItem.name
+-                            : infoController.bangumiItem.nameCn,
+-                      ),
+-                    ),
+-                  ),
+-                ),
+-                automaticallyImplyLeading: false,
+-                scrolledUnderElevation: 0.0,
+-                leading: EmbeddedNativeControlArea(
+-                  child: IconButton(
+-                    onPressed: () {
+-                      context.maybePop();
+-                    },
+-                    icon: Icon(Icons.arrow_back),
+-                  ),
+-                ),
+-                actions: [
+-                  if (innerBoxIsScrolled)
+-                    EmbeddedNativeControlArea(
+-                      child: CollectButton(
+-                        bangumiItem: infoController.bangumiItem,
+-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+-                      ),
+-                    ),
+-                  EmbeddedNativeControlArea(
+-                    child: InfoActionsMenu(
+-                      bangumiItem: infoController.bangumiItem,
+-                    ),
+-                  ),
+-                  if (isDesktop() && !showWindowButton)
+-                    CloseButton(onPressed: () => windowManager.close()),
+-                  SizedBox(width: 8),
+-                ],
+-                toolbarHeight: kToolbarHeight + topOffset,
+-                stretch: true,
+-                centerTitle: false,
+-                expandedHeight:
+-                    308 + kTextTabBarHeight + kToolbarHeight + topOffset,
+-                collapsedHeight: kTextTabBarHeight +
+-                    kToolbarHeight +
+-                    MediaQuery.paddingOf(context).top +
+-                    topOffset,
+-                flexibleSpace: FlexibleSpaceBar(
+-                  collapseMode: CollapseMode.pin,
+-                  background: Observer(builder: (context) {
+-                    final showBangumiInfoSkeleton =
+-                        _isShowingBangumiInfoSkeleton;
+-                    return Stack(
+-                      children: [
+-                        if (!showBangumiInfoSkeleton)
+-                          Positioned.fill(
+-                            bottom: kTextTabBarHeight,
+-                            child: IgnorePointer(
+-                              child: _InfoHeaderBackground(
+-                                imageUrl: infoController
+-                                        .bangumiItem.images['large'] ??
+-                                    '',
+-                              ),
+-                            ),
+-                          ),
+-                        SafeArea(
+-                          bottom: false,
+-                          child: EmbeddedNativeControlArea(
+-                            child: Align(
+-                              alignment: Alignment.topCenter,
+-                              child: Padding(
+-                                padding: const EdgeInsets.fromLTRB(
+-                                    16, kToolbarHeight, 16, 0),
+-                                child: BangumiInfoCardV(
+-                                  bangumiItem: infoController.bangumiItem,
+-                                  isLoading: showBangumiInfoSkeleton,
+-                                  showRating: showRating,
+-                                ),
+-                              ),
+-                            ),
+-                          ),
+-                        ),
+-                      ],
+-                    );
+-                  }),
+-                ),
+-                forceElevated: innerBoxIsScrolled,
+-                bottom: TabBar(
+-                  controller: infoTabController,
+-                  isScrollable: true,
+-                  tabAlignment: TabAlignment.center,
+-                  dividerHeight: 0,
+-                  tabs: _infoTabs.map((name) => Tab(text: name)).toList(),
+-                ),
+-              ),
+-            ),
+-          ];
+-        },
++    return Observer(builder: (context) {
++      final item = infoController.bangumiItem;
++      return AnonSubjectPage(
++        item: item,
++        showRating: showRating,
++        tabController: infoTabController,
++        tabs: _infoTabs,
++        collectAction: CollectButton(bangumiItem: item, color: Theme.of(context).colorScheme.primary),
++        menu: InfoActionsMenu(bangumiItem: item),
++        onWatch: _startWatching,
+         body: Observer(builder: (context) {
+           final showBangumiInfoSkeleton = _isShowingBangumiInfoSkeleton;
+           return InfoTabView(
+@@ -465,120 +358,7 @@
+             isLoading: showBangumiInfoSkeleton,
+           );
+         }),
+-      ),
+-      floatingActionButton: FloatingActionButton.extended(
+-        tooltip: '开始观看',
+-        onPressed: _startWatching,
+-        label: const Text('开始观看'),
+-        icon: const Icon(Icons.play_arrow_rounded),
+-      ),
+-    );
++      );
++    });
+   }
+ }
+-
+-class _InfoHeaderBackground extends StatelessWidget {
+-  const _InfoHeaderBackground({
+-    required this.imageUrl,
+-  });
+-
+-  static const double _downsample = 0.5;
+-  static const double _blurSigma = 15.0;
+-  static const double _opacity = 0.4;
+-  static const double _edgeBleed = 32.0;
+-  static const double _bottomFeatherHeight = 48.0;
+-
+-  final String imageUrl;
+-
+-  @override
+-  Widget build(BuildContext context) {
+-    if (imageUrl.isEmpty) {
+-      return const SizedBox.shrink();
+-    }
+-
+-    return LayoutBuilder(
+-      builder: (context, constraints) {
+-        final width = constraints.maxWidth;
+-        final height = constraints.maxHeight;
+-        if (width <= 0 || height <= 0) {
+-          return const SizedBox.shrink();
+-        }
+-
+-        final rasterWidth = width * _downsample;
+-        final rasterHeight = (height + _edgeBleed) * _downsample;
+-
+-        final backgroundColor = Theme.of(context).scaffoldBackgroundColor;
+-
+-        return ClipRect(
+-          child: Stack(
+-            fit: StackFit.expand,
+-            children: [
+-              ShaderMask(
+-                shaderCallback: (bounds) {
+-                  return const LinearGradient(
+-                    begin: Alignment.topCenter,
+-                    end: Alignment.bottomCenter,
+-                    colors: [
+-                      Colors.white,
+-                      Colors.transparent,
+-                    ],
+-                    stops: [0.8, 1],
+-                  ).createShader(bounds);
+-                },
+-                child: Align(
+-                  alignment: Alignment.topCenter,
+-                  child: RepaintBoundary(
+-                    child: Transform.scale(
+-                      scale: 1 / _downsample,
+-                      alignment: Alignment.topCenter,
+-                      filterQuality: FilterQuality.low,
+-                      child: SizedBox(
+-                        width: rasterWidth,
+-                        height: rasterHeight,
+-                        child: ImageFiltered(
+-                          imageFilter: ImageFilter.blur(
+-                            sigmaX: _blurSigma * _downsample,
+-                            sigmaY: _blurSigma * _downsample,
+-                          ),
+-                          child: NetworkImgLayer(
+-                            src: imageUrl,
+-                            width: rasterWidth,
+-                            height: rasterHeight,
+-                            fadeInDuration: Duration.zero,
+-                            fadeOutDuration: Duration.zero,
+-                            filterQuality: FilterQuality.low,
+-                            color: Colors.white.withValues(alpha: _opacity),
+-                            colorBlendMode: BlendMode.modulate,
+-                          ),
+-                        ),
+-                      ),
+-                    ),
+-                  ),
+-                ),
+-              ),
+-              Positioned(
+-                left: 0,
+-                right: 0,
+-                bottom: 0,
+-                height: _bottomFeatherHeight,
+-                child: DecoratedBox(
+-                  decoration: BoxDecoration(
+-                    gradient: LinearGradient(
+-                      begin: Alignment.topCenter,
+-                      end: Alignment.bottomCenter,
+-                      colors: [
+-                        backgroundColor.withValues(alpha: 0),
+-                        backgroundColor.withValues(alpha: 0.55),
+-                        backgroundColor,
+-                      ],
+-                      stops: const [0, 0.72, 1],
+-                    ),
+-                  ),
+-                ),
+-              ),
+-            ],
+-          ),
+-        );
+-      },
+-    );
+-  }
+-}
+diff --git a/lib/pages/collect/collect_page.dart b/lib/pages/collect/collect_page.dart
+--- a/lib/pages/collect/collect_page.dart
++++ b/lib/pages/collect/collect_page.dart
+@@ -4,9 +4,8 @@
+ import 'package:flutter_mobx/flutter_mobx.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+ 
+-import 'package:kazumi/bean/appbar/sys_app_bar.dart';
++import 'package:kazumi/anon/anon_feature_frame.dart';
+ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+-import 'package:kazumi/bean/widget/state_presentation.dart';
+ import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+ import 'package:kazumi/modules/bangumi/sync_priority.dart';
+ import 'package:kazumi/modules/collect/collect_layout.dart';
+@@ -107,36 +106,16 @@
+ 
+   @override
+   Widget build(BuildContext context) {
+-    return Scaffold(
+-      appBar: SysAppBar(
+-        needTopOffset: false,
+-        toolbarHeight: 72,
+-        title: Text(
+-          '追番',
+-          style: Theme.of(context)
+-              .textTheme
+-              .headlineSmall
+-              ?.copyWith(fontWeight: FontWeight.w700),
++    return AnonFeatureFrame(
++      title: '我的追番',
++      actions: [
++        TextButton.icon(
++          onPressed: _syncDialogOpen || _pendingIds.isNotEmpty ? null : _sync,
++          icon: const Icon(Icons.sync_rounded, size: 18),
++          label: const Text('同步'),
+         ),
+-        actions: [
+-          Padding(
+-            padding: const EdgeInsets.only(right: 8),
+-            child: Tooltip(
+-              message: '同步收藏',
+-              child: StateActionButton.tonal(
+-                text: '同步',
+-                onPressed:
+-                    _syncDialogOpen || _pendingIds.isNotEmpty ? null : _sync,
+-                icon: Icons.sync_rounded,
+-              ),
+-            ),
+-          ),
+-        ],
+-      ),
+-      body: SafeArea(
+-        top: false,
+-        bottom: false,
+-        child: Observer(
++      ],
++      body: Observer(
+           builder: (context) => CollectLibraryView(
+             entries: collectController.collectibles.toList(),
+             showRating: GStorage.getSetting(SettingsKeys.showRating),
+@@ -147,7 +126,6 @@
+             onOpen: (item) => context.pushNamed('/info/', arguments: item),
+             onChangeType: (item, type) => unawaited(_changeType(item, type)),
+           ),
+-        ),
+       ),
+     );
+   }
+diff --git a/lib/pages/collect/collect_library_controls.dart b/lib/pages/collect/collect_library_controls.dart
+--- a/lib/pages/collect/collect_library_controls.dart
++++ b/lib/pages/collect/collect_library_controls.dart
+@@ -3,65 +3,37 @@
+ class _CollectCategories extends StatelessWidget {
+   const _CollectCategories({
+     required this.controller,
+-    required this.selected,
+     required this.count,
+   });
+ 
+   final TabController controller;
+-  final ValueListenable<CollectType?> selected;
+   final int Function(CollectType?) count;
+ 
+   @override
+   Widget build(BuildContext context) {
+     final theme = Theme.of(context);
+     final colors = theme.colorScheme;
+-    // Each lerped weight is a new font instance, so TabBar animates only the
+-    // color and the selected label turns bold once per category change.
+-    final labelStyle =
+-        theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w500);
++    final labelStyle = theme.textTheme.titleSmall;
+     return TabBar(
+       key: const PageStorageKey('collect-filter-strip'),
+       controller: controller,
+       isScrollable: true,
+       tabAlignment: TabAlignment.start,
+-      dividerHeight: 0,
+-      indicatorSize: TabBarIndicatorSize.tab,
+-      indicatorPadding: const EdgeInsets.symmetric(horizontal: 2),
+-      indicator: BoxDecoration(
+-        color: colors.primary,
+-        borderRadius: BorderRadius.circular(24),
+-      ),
+-      indicatorAnimation: TabIndicatorAnimation.elastic,
+-      labelColor: colors.onPrimary,
++      dividerColor: colors.outlineVariant,
++      indicatorSize: TabBarIndicatorSize.label,
++      labelPadding: const EdgeInsets.only(right: 14),
++      labelColor: colors.primary,
+       unselectedLabelColor: colors.onSurfaceVariant,
+-      labelStyle: labelStyle,
++      labelStyle: labelStyle?.copyWith(fontWeight: FontWeight.w700),
+       unselectedLabelStyle: labelStyle,
+-      labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+-      splashFactory: NoSplash.splashFactory,
+-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+       tabs: [
+         for (final type in _collectCategories)
+           Tab(
+-            height: 48,
++            height: 44,
+             child: Semantics(
+               label: '${type?.label ?? '全部'}，${count(type)} 部',
+               excludeSemantics: true,
+-              child: ConstrainedBox(
+-                constraints: const BoxConstraints(minWidth: 64),
+-                child: Padding(
+-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+-                  child: ValueListenableBuilder(
+-                    valueListenable: selected,
+-                    builder: (context, value, _) => Text(
+-                      type?.label ?? '全部',
+-                      textAlign: TextAlign.center,
+-                      style: value == type
+-                          ? const TextStyle(fontWeight: FontWeight.w700)
+-                          : null,
+-                    ),
+-                  ),
+-                ),
+-              ),
++              child: Text('${type?.label ?? '全部'} ${count(type)}'),
+             ),
+           ),
+       ],
+diff --git a/lib/pages/collect/collect_library_view.dart b/lib/pages/collect/collect_library_view.dart
+--- a/lib/pages/collect/collect_library_view.dart
++++ b/lib/pages/collect/collect_library_view.dart
+@@ -235,7 +235,6 @@
+             Expanded(
+               child: _CollectCategories(
+                 controller: _tabController,
+-                selected: _selectedType,
+                 count: query.count,
+               ),
+             ),
+diff --git a/lib/pages/history/history_page.dart b/lib/pages/history/history_page.dart
+--- a/lib/pages/history/history_page.dart
++++ b/lib/pages/history/history_page.dart
+@@ -1,7 +1,9 @@
+ import 'package:flutter/material.dart';
+ import 'package:flutter_mobx/flutter_mobx.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+-import 'package:kazumi/bean/appbar/sys_app_bar.dart';
++import 'package:kazumi/anon/anon_feature_frame.dart';
++import 'package:kazumi/anon/anon_watch_stats.dart';
++import 'package:kazumi/pages/my/my_controller.dart';
+ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/modules/collect/collect_type.dart';
+ import 'package:kazumi/modules/history/history_module.dart';
+@@ -100,45 +102,23 @@
+             setState(() => _editing = false);
+           }
+         },
+-        child: Scaffold(
+-          appBar: SysAppBar(
+-            title: Text('历史记录',
+-                style: Theme.of(context)
+-                    .textTheme
+-                    .headlineSmall
+-                    ?.copyWith(fontWeight: FontWeight.w700)),
+-            actions: [
+-              if (entries.isNotEmpty) ...[
+-                Padding(
+-                  padding: const EdgeInsets.only(right: 8),
+-                  child: _editing
+-                      ? FilledButton.tonal(
+-                          onPressed: _clearing
+-                              ? null
+-                              : () => setState(() => _editing = false),
+-                          child: const Text('完成'),
+-                        )
+-                      : IconButton.filledTonal(
+-                          tooltip: '管理历史记录',
+-                          onPressed: () => setState(() => _editing = true),
+-                          icon: const Icon(Icons.edit_outlined),
+-                        ),
+-                ),
+-                if (_editing)
+-                  IconButton(
+-                    tooltip: '清空全部历史记录',
+-                    onPressed: _clearing || _deleting.isNotEmpty
+-                        ? null
+-                        : _clearHistory,
+-                    icon: const Icon(Icons.delete_sweep_outlined),
+-                  ),
+-              ],
+-            ],
+-          ),
+-          body: SafeArea(
+-            top: false,
+-            bottom: false,
+-            child: HistoryListView(
++        child: AnonFeatureFrame(
++          title: '历史记录',
++          actions: [
++            if (entries.isNotEmpty)
++              TextButton(
++                onPressed: _clearing ? null : () => setState(() => _editing = !_editing),
++                child: Text(_editing ? '完成' : '管理'),
++              ),
++            if (_editing)
++              IconButton(
++                tooltip: '清空全部历史记录',
++                onPressed: _clearing || _deleting.isNotEmpty ? null : _clearHistory,
++                icon: const Icon(Icons.delete_sweep_outlined),
++              ),
++          ],
++          body: HistoryListView(
++              header: AnonWatchStats(controller: inject<MyController>()),
+               entries: entries,
+               editing: _editing,
+               itemBuilder: (history, borderRadius) => _HistoryCard(
+@@ -148,7 +128,6 @@
+                 busy: _clearing || _deleting.contains(history.key),
+                 onDelete: () => _deleteHistory(history),
+               ),
+-            ),
+           ),
+         ),
+       );
+diff --git a/lib/pages/history/history_list_view.dart b/lib/pages/history/history_list_view.dart
+--- a/lib/pages/history/history_list_view.dart
++++ b/lib/pages/history/history_list_view.dart
+@@ -12,10 +12,12 @@
+     required this.entries,
+     required this.itemBuilder,
+     this.editing = false,
++    this.header,
+   });
+ 
+   final List<History> entries;
+   final bool editing;
++  final Widget? header;
+   final Widget Function(History history, BorderRadius borderRadius) itemBuilder;
+ 
+   @override
+@@ -110,6 +112,11 @@
+                   ScrollConfiguration.of(context).copyWith(scrollbars: false),
+               keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+               slivers: [
++                if (widget.header != null)
++                  SliverPadding(
++                    padding: EdgeInsets.fromLTRB(inset + 4, 18, inset, 0),
++                    sliver: SliverToBoxAdapter(child: widget.header!),
++                  ),
+                 if (widget.entries.isNotEmpty || filtered)
+                   SliverPadding(
+                     padding: EdgeInsets.fromLTRB(inset, 16, inset, 0),
+@@ -232,57 +239,11 @@
+   }
+ 
+   Widget _filter(HistorySourceFilter source) {
+-    final theme = Theme.of(context);
+-    final selected = _source == source;
+-    final colors = theme.colorScheme;
+-    final shape = BorderRadius.circular(selected ? 20 : 12);
+-    return Semantics(
+-      button: true,
+-      selected: selected,
+-      child: AnimatedContainer(
+-        duration: MediaQuery.disableAnimationsOf(context)
+-            ? Duration.zero
+-            : const Duration(milliseconds: 250),
+-        curve: Curves.easeInOutCubicEmphasized,
+-        decoration: BoxDecoration(
+-          color:
+-              selected ? colors.secondaryContainer : colors.surfaceContainerLow,
+-          borderRadius: shape,
+-        ),
+-        child: Material(
+-          color: Colors.transparent,
+-          borderRadius: shape,
+-          clipBehavior: Clip.antiAlias,
+-          child: InkWell(
+-            onTap: () => _updateFilters(() => _source = source),
+-            child: ConstrainedBox(
+-              constraints: const BoxConstraints(minHeight: 48),
+-              child: Padding(
+-                padding:
+-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+-                child: Row(
+-                  mainAxisSize: MainAxisSize.min,
+-                  children: [
+-                    if (selected) ...[
+-                      Icon(Icons.check_rounded,
+-                          size: 18, color: colors.onSecondaryContainer),
+-                      const SizedBox(width: 8),
+-                    ],
+-                    Text(source.label,
+-                        style: theme.textTheme.labelLarge?.copyWith(
+-                          fontWeight:
+-                              selected ? FontWeight.w700 : FontWeight.w500,
+-                          color: selected
+-                              ? colors.onSecondaryContainer
+-                              : colors.onSurfaceVariant,
+-                        )),
+-                  ],
+-                ),
+-              ),
+-            ),
+-          ),
+-        ),
+-      ),
++    return ChoiceChip(
++      label: Text(source.label),
++      selected: _source == source,
++      showCheckmark: false,
++      onSelected: (_) => _updateFilters(() => _source = source),
+     );
+   }
+ 
+diff --git a/lib/pages/popular/popular_page.dart b/lib/pages/popular/popular_page.dart
+--- a/lib/pages/popular/popular_page.dart
++++ b/lib/pages/popular/popular_page.dart
+@@ -159,6 +159,7 @@
+ 
+   Widget buildSliverAppBar() {
+     final theme = Theme.of(context);
++    final actions = buildActions();
+     return SliverAppBar(
+       pinned: true,
+       stretch: true,
+@@ -167,7 +168,7 @@
+       titleSpacing: 0,
+       centerTitle: false,
+       backgroundColor: Theme.of(context).colorScheme.surface,
+-      actions: buildActions(),
++      actions: actions,
+       title: null,
+       flexibleSpace: SafeArea(
+         child: dtb.DragToMoveArea(
+@@ -184,8 +185,14 @@
+               return Align(
+                 alignment: Alignment.centerLeft,
+                 child: Padding(
+-                  padding: const EdgeInsets.only(
+-                      left: 16, top: 8, bottom: 8, right: 60),
++                  padding: EdgeInsets.only(
++                    left: ModalRoute.of(context)?.impliesAppBarDismissal == true
++                        ? kToolbarHeight + 4
++                        : 16,
++                    top: 8,
++                    bottom: 8,
++                    right: kMinInteractiveDimension * actions.length + 8,
++                  ),
+                   child: SizedBox(
+                     height: 44,
+                     child: Observer(
+@@ -210,13 +217,15 @@
+                             child: Row(
+                               mainAxisSize: MainAxisSize.min,
+                               children: [
+-                                Text(
++                                Flexible(child: Text(
+                                   isTrend ? '热门番组' : popularController.currentTag,
++                                  maxLines: 1,
++                                  overflow: TextOverflow.ellipsis,
+                                   style: theme.textTheme.headlineMedium!.copyWith(
+                                     fontWeight: fontWeight,
+                                     fontSize: fontSize,
+                                   ),
+-                                ),
++                                )),
+                                 const SizedBox(width: 4),
+                                 Icon(Icons.keyboard_arrow_down,
+                                     size: fontSize, color: theme.iconTheme.color),

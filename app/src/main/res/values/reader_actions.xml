@@ -1,0 +1,6 @@
+<resources>
+    <item type="id" name="action_reader_tools" />
+    <item type="id" name="action_reader_previous_page" />
+    <item type="id" name="action_reader_next_page" />
+    <item type="id" name="action_reader_retry_image" />
+</resources>

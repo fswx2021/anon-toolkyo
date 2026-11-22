@@ -1,0 +1,151 @@
+--- a/lib/bean/card/network_img_layer.dart
++++ b/lib/bean/card/network_img_layer.dart
+@@ -1,5 +1,8 @@
++import 'dart:math' as math;
++
+ import 'package:cached_network_image/cached_network_image.dart';
+ import 'package:flutter/material.dart';
++import 'package:kazumi/bean/widget/loading_indicator.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/utils/constants.dart';
+ import 'package:kazumi/utils/image_extension.dart';
+@@ -94,7 +97,7 @@
+           KazumiLogger().w("NetworkImage: network image load error", error: e);
+         },
+         errorWidget: (context, url, error) => _placeholder(context),
+-        placeholder: (context, url) => _placeholder(context),
++        placeholder: (context, url) => _placeholder(context, loading: true),
+       ),
+     );
+   }
+@@ -142,7 +145,22 @@
+         _ => StyleString.imgRadius.x,
+       });
+ 
+-  Widget _placeholder(BuildContext context) {
++  Widget _placeholder(BuildContext context, {bool loading = false}) {
++    final colors = Theme.of(context).colorScheme;
++    final indicatorSize = math.min(width, height).clamp(14.0, 36.0).toDouble();
++    final Widget content;
++    if (type == 'bg') {
++      content = const SizedBox();
++    } else if (type == 'avatar') {
++      content = Image.asset('assets/images/noface.jpeg',
++          width: width, height: height, cacheWidth: width.cacheSize(context),
++          cacheHeight: height.cacheSize(context));
++    } else if (loading) {
++      content = LoadingIndicator(size: indicatorSize, semanticsLabel: '正在加载图片');
++    } else {
++      content = Icon(Icons.image_outlined, color: colors.outline,
++          size: indicatorSize * .65);
++    }
+     return Container(
+       width: width,
+       height: height,
+@@ -154,19 +172,7 @@
+             .withValues(alpha: 0.4),
+         borderRadius: _borderRadius,
+       ),
+-      child: type == 'bg'
+-          ? const SizedBox()
+-          : Center(
+-              child: Image.asset(
+-                type == 'avatar'
+-                    ? 'assets/images/noface.jpeg'
+-                    : 'assets/images/loading.png',
+-                width: width,
+-                height: height,
+-                cacheWidth: width.cacheSize(context),
+-                cacheHeight: height.cacheSize(context),
+-              ),
+-            ),
++      child: Center(child: content),
+     );
+   }
+ }
+--- a/lib/pages/player/player_item_surface.dart
++++ b/lib/pages/player/player_item_surface.dart
+@@ -1,6 +1,7 @@
+ import 'package:flutter/material.dart';
+ import 'package:flutter_mobx/flutter_mobx.dart';
+ import 'package:media_kit_video/media_kit_video.dart';
++import 'package:kazumi/bean/widget/loading_indicator.dart';
+ import 'package:kazumi/pages/player/player_controller.dart';
+ 
+ class PlayerItemSurface extends StatefulWidget {
+@@ -25,7 +26,11 @@
+         return Container(
+           color: Colors.black,
+           child: const Center(
+-            child: CircularProgressIndicator(),
++            child: LoadingIndicator(
++              size: 52,
++              color: Color(0xfff299a6),
++              semanticsLabel: '正在载入播放器',
++            ),
+           ),
+         );
+       }
+--- a/lib/pages/player/player_item.dart
++++ b/lib/pages/player/player_item.dart
+@@ -17,6 +17,7 @@
+ import 'package:flutter/gestures.dart';
+ import 'package:kazumi/pages/player/player_controller.dart';
+ import 'package:flutter/material.dart';
++import 'package:kazumi/bean/widget/loading_indicator.dart';
+ import 'package:flutter_mobx/flutter_mobx.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:kazumi/pages/video/video_controller.dart';
+@@ -1426,14 +1427,19 @@
+                         playerController: playerController,
+                       ),
+                     ),
+-                    (playerController.playback.isBuffering ||
+-                            videoPageController.loading)
+-                        ? const Positioned.fill(
+-                            child: Center(
+-                              child: CircularProgressIndicator(),
+-                            ),
+-                          )
+-                        : Container(),
++                    if (playerController.playback.isBuffering &&
++                        !playerController.playback.loading &&
++                        !videoPageController.loading &&
++                        playerController.playback.videoController != null)
++                      const Positioned.fill(
++                        child: Center(
++                          child: LoadingIndicator(
++                            size: 44,
++                            color: Color(0xfff299a6),
++                            semanticsLabel: '视频缓冲中',
++                          ),
++                        ),
++                      ),
+                     GestureDetector(
+                       onTapDown: (details) {
+                         _lastTapPointerKind = details.kind;
+--- a/lib/pages/video/video_page.dart
++++ b/lib/pages/video/video_page.dart
+@@ -376,15 +376,16 @@
+                       child: Column(
+                         mainAxisAlignment: MainAxisAlignment.center,
+                         children: [
+-                          LoadingIndicator(
+-                              color: Theme.of(context)
+-                                  .colorScheme
+-                                  .tertiaryContainer),
++                          const LoadingIndicator(
++                            size: 60,
++                            color: Color(0xfff299a6),
++                            semanticsLabel: '正在准备视频',
++                          ),
+                           const SizedBox(height: 10),
+                           Text(
+                             videoPageController.loading
+-                                ? '视频资源解析中'
+-                                : '视频资源解析成功, 播放器加载中',
++                                ? '正在解析视频'
++                                : '正在载入播放器',
+                             style: const TextStyle(color: Colors.white),
+                           ),
+                         ],

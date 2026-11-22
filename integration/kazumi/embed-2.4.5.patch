@@ -1,0 +1,1115 @@
+diff --git a/android/app/src/main/kotlin/com/example/kazumi/MainActivity.kt b/android/app/src/main/kotlin/com/example/kazumi/MainActivity.kt
+index cf4f3d7..df36c86 100644
+--- a/android/app/src/main/kotlin/com/example/kazumi/MainActivity.kt
++++ b/android/app/src/main/kotlin/com/example/kazumi/MainActivity.kt
+@@ -37,6 +37,7 @@ class MainActivity: AudioServiceActivity() {
+     private var intentChannel: MethodChannel? = null
+     private var pipChannel: MethodChannel? = null
+     private var downloadDirectoryChannel: MethodChannel? = null
++    private var legacyLibraryChannel: MethodChannel? = null
+     private var downloadDirectoryHandler: DownloadDirectoryHandler? = null
+ 
+     private var pipIsPlaying = false
+@@ -76,6 +77,8 @@ class MainActivity: AudioServiceActivity() {
+     }
+ 
+     override fun onDestroy() {
++        legacyLibraryChannel?.setMethodCallHandler(null)
++        legacyLibraryChannel = null
+         downloadDirectoryChannel?.setMethodCallHandler(null)
+         downloadDirectoryChannel = null
+         downloadDirectoryHandler?.dispose()
+@@ -107,6 +110,20 @@ class MainActivity: AudioServiceActivity() {
+ 
+     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
+         super.configureFlutterEngine(flutterEngine)
++        val messenger = flutterEngine.dartExecutor.binaryMessenger
++        legacyLibraryChannel = MethodChannel(messenger, "com.shengjian.player/legacy-anime")
++        legacyLibraryChannel?.setMethodCallHandler { call, result ->
++            when (call.method) {
++                "favorites" -> result.success(
++                    getSharedPreferences("anime_library", MODE_PRIVATE).getString("favorites", "[]")
++                )
++                "danmakuVisible" -> {
++                    val settings = getSharedPreferences("anime-danmaku", MODE_PRIVATE)
++                    result.success(if (settings.contains("visible")) settings.getBoolean("visible", true) else null)
++                }
++                else -> result.notImplemented()
++            }
++        }
+         downloadDirectoryHandler = DownloadDirectoryHandler(this)
+         downloadDirectoryChannel = MethodChannel(
+             flutterEngine.dartExecutor.binaryMessenger, DownloadDirectoryHandler.CHANNEL
+diff --git a/lib/bean/card/network_img_layer.dart b/lib/bean/card/network_img_layer.dart
+index 965576e..98a7cc0 100644
+--- a/lib/bean/card/network_img_layer.dart
++++ b/lib/bean/card/network_img_layer.dart
+@@ -66,6 +66,15 @@ class NetworkImgLayer extends StatelessWidget {
+     }
+ 
+     final (memCacheWidth, memCacheHeight) = _cacheSize(context);
++    if (RegExp(r'^assets/anon/posters/[0-9]+\.webp$').hasMatch(imageUrl)) {
++      return ClipRRect(
++        borderRadius: _borderRadius,
++        child: Image.asset(imageUrl, width: width, height: height, fit: fit,
++            cacheWidth: memCacheWidth, cacheHeight: memCacheHeight,
++            color: color, colorBlendMode: colorBlendMode, filterQuality: filterQuality,
++            errorBuilder: (context, error, stack) => _placeholder(context)),
++      );
++    }
+     return ClipRRect(
+       clipBehavior: Clip.antiAlias,
+       borderRadius: _borderRadius,
+diff --git a/lib/pages/about/about_page.dart b/lib/pages/about/about_page.dart
+index 99d599d..e9b8e4b 100644
+--- a/lib/pages/about/about_page.dart
++++ b/lib/pages/about/about_page.dart
+@@ -137,7 +137,6 @@ class _ProjectHeader extends StatelessWidget {
+             runSpacing: 8,
+             crossAxisAlignment: WrapCrossAlignment.center,
+             children: [
+-              CheckUpdateButton(onCheckUpdate: onCheckUpdate),
+               TextButton(
+                 style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+                 onPressed: () => openAboutLink(
+diff --git a/lib/pages/download/download_controller.dart b/lib/pages/download/download_controller.dart
+index ea96951..45e0e63 100644
+--- a/lib/pages/download/download_controller.dart
++++ b/lib/pages/download/download_controller.dart
+@@ -147,7 +147,7 @@ abstract class _DownloadController with Store {
+     if (episode.status == DownloadStatus.completed &&
+         GStorage.getSetting(SettingsKeys.downloadDanmaku)) {
+       _fetchAndCacheDanmakuAsync(
+-          record.bangumiId, episodeNumber, episode.downloadDirectory);
++            record.bangumiId, record.bangumiName, episodeNumber, episode.downloadDirectory);
+     }
+ 
+     final key = '${recordKey}_$episodeNumber';
+@@ -697,7 +697,7 @@ abstract class _DownloadController with Store {
+   }
+ 
+   void _fetchAndCacheDanmakuAsync(
+-      int bangumiId, int episodeNumber, String downloadDirectory) {
++      int bangumiId, String title, int episodeNumber, String downloadDirectory) {
+     Future(() async {
+       try {
+         KazumiLogger().i(
+@@ -705,7 +705,7 @@ abstract class _DownloadController with Store {
+ 
+         // 获取 DanDan 番剧 ID
+         final danDanBangumiID =
+-            await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId);
++            await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId, titles: [title]);
+         if (danDanBangumiID == 0) {
+           KazumiLogger().w(
+               'DownloadController: failed to get DanDan bangumiID for $bangumiId');
+diff --git a/lib/pages/info/info_controller.dart b/lib/pages/info/info_controller.dart
+index 0e21434..103d8e3 100644
+--- a/lib/pages/info/info_controller.dart
++++ b/lib/pages/info/info_controller.dart
+@@ -8,6 +8,8 @@ import 'package:kazumi/modules/search/plugin_search_module.dart';
+ import 'package:kazumi/request/apis/bangumi_api.dart';
+ import 'package:mobx/mobx.dart';
+ import 'package:kazumi/services/logging/logger.dart';
++import 'package:kazumi/services/storage/storage.dart';
++import 'package:kazumi/services/sync/bangumi_sync_service.dart';
+ import 'package:kazumi/modules/comments/comment_item.dart';
+ import 'package:kazumi/modules/characters/character_item.dart';
+ import 'package:kazumi/modules/staff/staff_item.dart';
+@@ -111,13 +113,23 @@ abstract class _InfoController with Store {
+   }
+ 
+   Future<void> _updateBangumiInfoByID(int id, {required String type}) async {
+-    final value = await BangumiApi.getBangumiInfoByID(id);
++    final viewer = GStorage.getSetting(SettingsKeys.bangumiSyncEnable)
++        ? BangumiSyncService().username
++        : '';
++    final value = await BangumiApi.getBangumiInfoByID(id, viewer: viewer);
+     if (value == null) {
+       return;
+     }
++    if (viewer != BangumiSyncService().username ||
++        !GStorage.getSetting(SettingsKeys.bangumiSyncEnable)) {
++      value.interest = null;
++    }
+     if (type == "init") {
+       bangumiItem = value;
+     } else {
++      if (value.images.values.any((url) => url.startsWith('https://'))) {
++        bangumiItem.images = value.images;
++      }
+       bangumiItem.summary = value.summary;
+       bangumiItem.tags = value.tags;
+       bangumiItem.rank = value.rank;
+diff --git a/lib/pages/menu/menu.dart b/lib/pages/menu/menu.dart
+index af87a54..6b84859 100644
+--- a/lib/pages/menu/menu.dart
++++ b/lib/pages/menu/menu.dart
+@@ -1,7 +1,6 @@
+ import 'package:flutter/material.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:flutter/services.dart';
+-import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/bean/widget/embedded_native_control_area.dart';
+ import 'package:kazumi/navigation.dart';
+ import 'package:kazumi/pages/menu/route_visibility.dart';
+@@ -19,7 +18,6 @@ class ScaffoldMenu extends StatefulWidget {
+ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
+   final _outletKey = GlobalKey<RouterOutletState>();
+   late int _selectedIndex = menu.indexForPath(widget.location);
+-  DateTime? _lastExitPromptAt;
+ 
+   /// The shell sits at the bottom of the root stack and stays mounted while
+   /// other pages cover it, so it publishes that state for its subtree.
+@@ -62,7 +60,6 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
+   }
+ 
+   void _selectDestination(int index) {
+-    _lastExitPromptAt = null;
+     if (index == _selectedIndex) {
+       return;
+     }
+@@ -74,7 +71,6 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
+ 
+   void _handleSystemBack(BuildContext context) {
+     if (_outletKey.currentState?.maybePop() ?? false) {
+-      _lastExitPromptAt = null;
+       return;
+     }
+ 
+@@ -83,16 +79,6 @@ class _ScaffoldMenu extends State<ScaffoldMenu> with RouteAware {
+       return;
+     }
+ 
+-    final now = DateTime.now();
+-    final lastPromptAt = _lastExitPromptAt;
+-    if (lastPromptAt == null ||
+-        now.difference(lastPromptAt) > const Duration(seconds: 2)) {
+-      _lastExitPromptAt = now;
+-      KazumiDialog.showToast(message: '再按一次退出应用', context: context);
+-      return;
+-    }
+-
+-    _lastExitPromptAt = null;
+     SystemNavigator.pop();
+   }
+ 
+diff --git a/lib/pages/my/my_controller.dart b/lib/pages/my/my_controller.dart
+index 6b0bac1..752fe07 100644
+--- a/lib/pages/my/my_controller.dart
++++ b/lib/pages/my/my_controller.dart
+@@ -7,7 +7,6 @@ import 'package:kazumi/repositories/danmaku_shield_repository.dart';
+ import 'package:kazumi/repositories/download_repository.dart';
+ import 'package:kazumi/repositories/history_repository.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+-import 'package:kazumi/services/update/auto_updater.dart';
+ import 'package:mobx/mobx.dart';
+ 
+ part 'my_controller.g.dart';
+@@ -153,22 +152,9 @@ abstract class _MyController with Store {
+   }
+ 
+   Future<bool> checkUpdate({String type = 'manual'}) async {
+-    try {
+-      final autoUpdater = AutoUpdater();
+-
+-      if (type == 'manual') {
+-        await autoUpdater.manualCheckForUpdates();
+-      } else {
+-        await autoUpdater.autoCheckForUpdates();
+-      }
+-
+-      return true;
+-    } catch (err) {
+-      KazumiLogger().e('Update: check update failed', error: err);
+-      if (type == 'manual') {
+-        KazumiDialog.showToast(message: '检查更新失败，请稍后重试');
+-      }
+-      return false;
++    if (type == 'manual') {
++      KazumiDialog.showToast(message: '动画模块随 anon toolkyo 更新');
+     }
++    return false;
+   }
+ }
+diff --git a/lib/pages/onboarding/onboarding_page.dart b/lib/pages/onboarding/onboarding_page.dart
+index dbd1283..f870332 100644
+--- a/lib/pages/onboarding/onboarding_page.dart
++++ b/lib/pages/onboarding/onboarding_page.dart
+@@ -1,5 +1,4 @@
+ import 'dart:async';
+-import 'dart:io';
+ 
+ import 'package:flutter/material.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+@@ -10,7 +9,6 @@ import 'package:kazumi/pages/my/my_controller.dart';
+ import 'package:kazumi/pages/onboarding/steps/disclaimer_step.dart';
+ import 'package:kazumi/pages/onboarding/steps/mirror_settings_step.dart';
+ import 'package:kazumi/pages/onboarding/steps/plugin_shop_step.dart';
+-import 'package:kazumi/pages/onboarding/steps/update_source_step.dart';
+ import 'package:kazumi/plugins/plugins_controller.dart';
+ import 'package:kazumi/services/platform/app_exit.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+@@ -32,7 +30,6 @@ class OnboardingPage extends StatefulWidget {
+ 
+ enum _OnboardingStep {
+   welcome('使用约定'),
+-  updates('更新来源'),
+   mirrors('访问加速'),
+   rules('添加规则');
+ 
+@@ -45,24 +42,16 @@ class _OnboardingPageState extends State<OnboardingPage> {
+   final _pageController = PageController();
+   final _steps = [
+     _OnboardingStep.welcome,
+-    if (Platform.isAndroid) _OnboardingStep.updates,
+     _OnboardingStep.mirrors,
+     _OnboardingStep.rules,
+   ];
+   int _currentIndex = 0;
+   bool _agreed = false;
+   bool _busy = false;
+-  late bool _useGithubUpdate;
+ 
+   PluginsController get _pluginsController => widget.pluginsController;
+   bool get _isLastStep => _currentIndex == _steps.length - 1;
+ 
+-  @override
+-  void initState() {
+-    super.initState();
+-    _useGithubUpdate = GStorage.getSetting(SettingsKeys.autoUpdate);
+-  }
+-
+   @override
+   void dispose() {
+     _pageController.dispose();
+@@ -71,13 +60,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
+ 
+   Widget _buildStep(_OnboardingStep step) => switch (step) {
+         _OnboardingStep.welcome => const DisclaimerStep(),
+-        _OnboardingStep.updates => UpdateSourceStep(
+-            useGithubUpdate: _useGithubUpdate,
+-            onChanged: (value) {
+-              setState(() => _useGithubUpdate = value);
+-              unawaited(GStorage.putSetting(SettingsKeys.autoUpdate, value));
+-            },
+-          ),
+         _OnboardingStep.mirrors => const MirrorSettingsStep(),
+         _OnboardingStep.rules => PluginShopStep(controller: _pluginsController),
+       };
+@@ -183,7 +165,9 @@ class _OnboardingPageState extends State<OnboardingPage> {
+   Widget build(BuildContext context) => PopScope(
+         canPop: false,
+         onPopInvokedWithResult: (bool didPop, Object? result) {
+-          if (!didPop) unawaited(_navigate(forward: false));
++          if (!didPop) {
++            unawaited(_currentIndex == 0 ? AppExit.quit() : _navigate(forward: false));
++          }
+         },
+         child: Scaffold(
+           appBar: const SysAppBar(),
+diff --git a/lib/pages/player/controller/player_danmaku_controller.dart b/lib/pages/player/controller/player_danmaku_controller.dart
+index 268a691..ca79df1 100644
+--- a/lib/pages/player/controller/player_danmaku_controller.dart
++++ b/lib/pages/player/controller/player_danmaku_controller.dart
+@@ -139,18 +139,21 @@ abstract class _PlayerDanmakuController with Store {
+   Future<DanmakuLoadResult> fetchDanmaku(
+     int bangumiId,
+     String pluginName,
+-    int episode,
+-  ) async {
++    int episode, {
++    List<String> titles = const [],
++  }) async {
+     if (isLocalPlayback()) {
+       return await _fetchCachedDanmaku(
+         bangumiId,
+         pluginName,
+         episode,
++        titles,
+       );
+     }
+     return await _fetchDanDanmakuByBgmBangumiID(
+       bangumiId,
+       episode,
++      titles,
+     );
+   }
+ 
+@@ -189,7 +192,7 @@ abstract class _PlayerDanmakuController with Store {
+   }
+ 
+   Future<DanmakuLoadResult> _fetchCachedDanmaku(
+-      int bangumiId, String pluginName, int episode) async {
++      int bangumiId, String pluginName, int episode, List<String> titles) async {
+     KazumiLogger().i(
+         'PlayerController: attempting to load cached danmaku for episode $episode');
+     var nextBangumiID = bangumiID;
+@@ -212,7 +215,7 @@ abstract class _PlayerDanmakuController with Store {
+             .i('PlayerController: no cached danmaku, attempting online fetch');
+         try {
+           nextBangumiID =
+-              await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId);
++              await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bangumiId, titles: titles);
+           if (nextBangumiID != 0) {
+             var res = await DanmakuApi.getDanDanmaku(nextBangumiID, episode);
+             if (res.isNotEmpty) {
+@@ -268,13 +271,13 @@ abstract class _PlayerDanmakuController with Store {
+   }
+ 
+   Future<DanmakuLoadResult> _fetchDanDanmakuByBgmBangumiID(
+-      int bgmBangumiID, int episode) async {
++      int bgmBangumiID, int episode, List<String> titles) async {
+     KazumiLogger().i(
+         'PlayerController: attempting to get danmaku [BgmBangumiID] $bgmBangumiID');
+     var nextBangumiID = bangumiID;
+     try {
+       nextBangumiID =
+-          await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bgmBangumiID);
++          await DanmakuApi.getDanDanBangumiIDByBgmBangumiID(bgmBangumiID, titles: titles);
+       if (nextBangumiID == 0) {
+         return DanmakuLoadResult.success(
+           danmakus: const [],
+diff --git a/lib/pages/popular/popular_page.dart b/lib/pages/popular/popular_page.dart
+index bc2bdf1..fca0c29 100644
+--- a/lib/pages/popular/popular_page.dart
++++ b/lib/pages/popular/popular_page.dart
+@@ -1,4 +1,6 @@
++import 'dart:convert';
+ import 'dart:ui';
++import 'package:flutter/services.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:kazumi/bean/widget/bangumi_mirror_error_widget.dart';
+@@ -29,6 +31,33 @@ class PopularPage extends StatefulWidget {
+ class _PopularPageState extends State<PopularPage> {
+   late final ScrollController scrollController;
+   PopularController get popularController => widget.controller;
++  List<BangumiItem> _bundledTitles = const [];
++  String _collected = '';
++
++  Future<void> _loadBundledTitles() async {
++    try {
++      final text = await rootBundle.loadString('assets/anon/anime-popular-2026-11-21.json');
++      final data = jsonDecode(text) as Map<String, dynamic>;
++      final titles = [
++        for (final row in (data['data'] as List).cast<Map<String, dynamic>>())
++          BangumiItem.fromJson({
++            ...row,
++            'rating': <String, dynamic>{},
++            'images': {'large': 'assets/anon/posters/${row["id"]}.webp'},
++          }),
++      ];
++      if (!mounted) return;
++      setState(() {
++        _bundledTitles = titles;
++        _collected = data['collected'] as String;
++      });
++    } catch (error) {
++      KazumiLogger().w('Popular: bundled list could not be read', error: error);
++    }
++  }
++
++  bool get _showBundled => popularController.currentTag.isEmpty &&
++      popularController.trendList.isEmpty && _bundledTitles.isNotEmpty;
+ 
+   @override
+   void initState() {
+@@ -38,6 +67,7 @@ class _PopularPageState extends State<PopularPage> {
+     );
+     scrollController.addListener(scrollListener);
+     if (popularController.trendList.isEmpty) {
++      _loadBundledTitles();
+       popularController.queryBangumiByTrend();
+     }
+   }
+@@ -71,6 +101,18 @@ class _PopularPageState extends State<PopularPage> {
+         controller: scrollController,
+         slivers: [
+           buildSliverAppBar(),
++          SliverToBoxAdapter(child: Observer(builder: (_) {
++            if (!_showBundled) return const SizedBox.shrink();
++            return Padding(
++              padding: const EdgeInsets.symmetric(horizontal: 16),
++              child: Row(children: [
++                Expanded(child: Text('离线收录 · $_collected')),
++                if (!popularController.isLoadingMore)
++                  TextButton(onPressed: () => popularController.queryBangumiByTrend(type: 'init'),
++                      child: const Text('刷新')),
++              ]),
++            );
++          })),
+           SliverToBoxAdapter(
+             child: Observer(
+               builder: (_) => AnimatedOpacity(
+@@ -86,13 +128,14 @@ class _PopularPageState extends State<PopularPage> {
+               padding: const EdgeInsets.fromLTRB(
+                   StyleString.cardSpace, 0, StyleString.cardSpace, 0),
+               sliver: Observer(builder: (_) {
++                if (_showBundled) return contentGrid(_bundledTitles);
+                 if (popularController.isTimeOut) {
+                   return SliverToBoxAdapter(
+                     child: SizedBox(
+                       height: 400,
+                       child: BangumiMirrorErrorWidget(
+                         onRetry: () {
+-                          if (popularController.trendList.isEmpty) {
++                          if (popularController.currentTag.isEmpty) {
+                             popularController.queryBangumiByTrend();
+                           } else {
+                             popularController.queryBangumiByTag();
+diff --git a/lib/pages/settings/update_settings.dart b/lib/pages/settings/update_settings.dart
+index 04781a3..7f498b7 100644
+--- a/lib/pages/settings/update_settings.dart
++++ b/lib/pages/settings/update_settings.dart
+@@ -12,7 +12,6 @@ class UpdateSettingsPage extends StatefulWidget {
+ }
+ 
+ class _UpdateSettingsPageState extends State<UpdateSettingsPage> {
+-  bool _autoUpdate = GStorage.getSetting(SettingsKeys.autoUpdate);
+   bool _pluginUpdate =
+       GStorage.getSetting(SettingsKeys.checkPluginUpdateOnStartup);
+ 
+@@ -24,15 +23,6 @@ class _UpdateSettingsPageState extends State<UpdateSettingsPage> {
+             SettingsSection(
+               title: const Text('启动时检查更新'),
+               tiles: [
+-                SettingsTile.switchTile(
+-                  leading: Icons.update_rounded,
+-                  title: const Text('应用更新'),
+-                  initialValue: _autoUpdate,
+-                  onToggle: (value) {
+-                    setState(() => _autoUpdate = value ?? !_autoUpdate);
+-                    GStorage.putSetting(SettingsKeys.autoUpdate, _autoUpdate);
+-                  },
+-                ),
+                 SettingsTile.switchTile(
+                   leading: Icons.extension_rounded,
+                   title: const Text('规则更新'),
+diff --git a/lib/pages/video/video_controller.dart b/lib/pages/video/video_controller.dart
+index 08b310b..7427acc 100644
+--- a/lib/pages/video/video_controller.dart
++++ b/lib/pages/video/video_controller.dart
+@@ -550,6 +550,7 @@ abstract class _VideoPageController with Store implements Disposable {
+         params.bangumiId,
+         params.pluginName,
+         params.danmakuEpisodeNumber,
++        titles: [bangumiItem.nameCn, bangumiItem.name],
+       );
+       if (session.isActive && danmakuSession.isActive) {
+         if (result.hasDanmakus) {
+diff --git a/lib/request/apis/bangumi_api.dart b/lib/request/apis/bangumi_api.dart
+index 2dcccc0..81d88c1 100644
+--- a/lib/request/apis/bangumi_api.dart
++++ b/lib/request/apis/bangumi_api.dart
+@@ -10,6 +10,7 @@ import 'package:kazumi/modules/bangumi/episode_item.dart';
+ import 'package:kazumi/modules/character/character_full_item.dart';
+ import 'package:kazumi/modules/staff/staff_response.dart';
+ import 'package:kazumi/modules/bangumi/bangumi_collection.dart';
++import 'package:kazumi/modules/bangumi/bangumi_interest.dart';
+ import 'package:kazumi/modules/collect/collect_type.dart';
+ import 'package:kazumi/modules/collect/collect_type_mapper.dart';
+ import 'package:kazumi/modules/bangumi/bangumi_collection_type.dart';
+@@ -358,7 +359,7 @@ class BangumiApi {
+     }
+   }
+ 
+-  static Future<BangumiItem?> getBangumiInfoByID(int id) async {
++  static Future<BangumiItem?> getBangumiInfoByID(int id, {String viewer = ''}) async {
+     try {
+       final jsonData = await _client.get(
+         ApiEndpoints.formatUrl(
+@@ -366,7 +367,29 @@ class BangumiApi {
+                 ApiEndpoints.bangumiInfoByIDNext,
+             [id]),
+       );
+-      return BangumiItem.fromJson(jsonData);
++      final item = BangumiItem.fromJson(jsonData);
++      if (viewer.isNotEmpty) {
++        try {
++          final path = Uri(pathSegments: ['v0', 'users', viewer, 'collections', '$id']).path;
++          final row = await _client.get('${ApiEndpoints.bangumiAPIDomain}/$path', requiresAuth: true);
++          if (row is Map<String, dynamic> && row['subject_id'] == id) {
++            final date = DateTime.tryParse(row['updated_at']?.toString() ?? '');
++            item.interest = BangumiInterest.fromJson({
++              ...row,
++              // The v0 response does not expose the interest record ID.
++              'id': 0,
++              'epStatus': row['ep_status'],
++              'volStatus': row['vol_status'],
++              'updatedAt': (date?.millisecondsSinceEpoch ?? 0) ~/ 1000,
++            });
++          }
++        } on NetworkException catch (error) {
++          if (error.statusCode != 404) {
++            KazumiLogger().w('Bangumi: personal collection unavailable', error: error);
++          }
++        }
++      }
++      return item;
+     } catch (e) {
+       KazumiLogger().e('Network: resolve bangumi item failed', error: e);
+       return null;
+@@ -526,7 +549,7 @@ class BangumiApi {
+     try {
+       final jsonData = await _client.get(
+         ApiEndpoints.formatUrl(
+-            ApiEndpoints.bangumiAuthAPIMirrorDomain +
++            ApiEndpoints.bangumiAPIDomain +
+                 ApiEndpoints.bangumiUsernameByToken,
+             []),
+         requiresAuth: true,
+@@ -566,7 +589,7 @@ class BangumiApi {
+       Future<Map> fetchPageData(int offset, int pageLimit) async {
+         await rateLimiter.acquire();
+         final url = ApiEndpoints.formatUrl(
+-            ApiEndpoints.bangumiAuthAPIMirrorDomain +
++            ApiEndpoints.bangumiAPIDomain +
+                 ApiEndpoints.bangumiGetAllCollections,
+             [username, pageLimit, offset]);
+         final jsonData = await _client.get(
+@@ -710,7 +733,7 @@ class BangumiApi {
+     try {
+       await _client.post(
+         ApiEndpoints.formatUrl(
+-            ApiEndpoints.bangumiAuthAPIMirrorDomain +
++            ApiEndpoints.bangumiAPIDomain +
+                 ApiEndpoints.bangumiSetCollection,
+             [id]),
+         data: data,
+diff --git a/lib/request/apis/community_danmaku.dart b/lib/request/apis/community_danmaku.dart
+new file mode 100644
+index 0000000..a0d2708
+--- /dev/null
++++ b/lib/request/apis/community_danmaku.dart
+@@ -0,0 +1,127 @@
++import 'package:kazumi/modules/danmaku/danmaku_episode_response.dart';
++import 'package:kazumi/modules/danmaku/danmaku_search_response.dart';
++import 'package:kazumi/request/core/dio_factory.dart';
++
++/// Read-only provider used by the host when a signed DanDanPlay account was
++/// not supplied at build time. Its episode IDs must be read from its catalogue.
++class CommunityDanmaku {
++  static const origin = 'https://danmaku-api.152468.xyz';
++  static final _cache = <int, List<Map<String, dynamic>>>{};
++  static final _titleCache = <String, int>{};
++
++  static Future<DanmakuSearchResponse> search(String name) async {
++    final response = await DioFactory.apiDio.get(
++      '$origin/api/v2/search/anime',
++      queryParameters: {'keyword': name},
++    );
++    final data = response.data as Map<String, dynamic>;
++    final rows = (data['animes'] as List?) ?? const [];
++    return DanmakuSearchResponse(
++      animes: [
++        for (final item in rows.whereType<Map<String, dynamic>>())
++          if (item['animeId'] is int && item['animeTitle'] is String)
++            DanmakuSearchAnime.fromJson(item),
++      ],
++      hasMore: data['hasMore'] == true,
++    );
++  }
++
++  static String _normalize(String name) => name.toLowerCase().replaceAll(
++    RegExp(r'''[\s!！?？.,，。:：・·\x60'"’“”「」『』()（）-]+'''),
++    '',
++  );
++
++  static Future<int> matchTitle(List<String> names) async {
++    for (final name in names.map((name) => name.trim()).toSet()) {
++      final key = _normalize(name);
++      if (key.isEmpty) continue;
++      final cached = _titleCache[key];
++      if (cached != null) return cached;
++      final results = await search(name);
++      final exact = results.animes
++          .where((item) => _normalize(item.animeTitle) == key)
++          .map((item) => item.animeId)
++          .toSet();
++      if (exact.length == 1 && !results.hasMore) {
++        if (_titleCache.length >= 64)
++          _titleCache.remove(_titleCache.keys.first);
++        return _titleCache[key] = exact.single;
++      }
++    }
++    return 0;
++  }
++
++  static Future<List<Map<String, dynamic>>> _episodes(int showId) async {
++    final cached = _cache[showId];
++    if (cached != null) return cached;
++    final response = await DioFactory.apiDio.get(
++      '$origin/api/v2/bangumi/$showId',
++    );
++    final detail = response.data['bangumi'];
++    if (detail is! Map ||
++        detail['animeId'] != showId ||
++        detail['episodes'] is! List) {
++      throw const FormatException('弹幕服务返回的剧集资料有误');
++    }
++    final entries = (detail['episodes'] as List)
++        .whereType<Map<String, dynamic>>()
++        .where(
++          (row) => row['episodeId'] is int && (row['episodeId'] as int) > 0,
++        )
++        .toList();
++    if (_cache.length >= 12) _cache.remove(_cache.keys.first);
++    return _cache[showId] = entries;
++  }
++
++  static Future<DanmakuEpisodeResponse> catalogue(int showId) async {
++    final rows = await _episodes(showId);
++    return DanmakuEpisodeResponse(
++      bangumiId: showId,
++      episodes: [
++        for (final row in rows)
++          DanmakuEpisode(
++            episodeId: row['episodeId'],
++            episodeTitle: (row['episodeTitle'] ?? row['episodeNumber'] ?? '')
++                .toString(),
++          ),
++      ],
++      errorCode: 0,
++      success: true,
++      errorMessage: '',
++    );
++  }
++
++  static final _episodeLabel = RegExp(
++    r'(?:第\s*(\d+)\s*[话話集回]|\b(?:EP(?:ISODE)?|E)\.?\s*(\d+)\b)',
++    caseSensitive: false,
++  );
++  static final _special = RegExp(
++    r'(?:\b(?:SP|OVA|OAD|PV|SPECIAL|EXTRA)\d*\b|番外|特典|预告|預告)',
++    caseSensitive: false,
++  );
++
++  static int? episodeId(Iterable<Map<String, dynamic>> rows, int number) {
++    final ids = <int>{};
++    for (final row in rows) {
++      final title = (row['episodeTitle'] ?? '').toString();
++      if (_special.hasMatch(title)) continue;
++      final label = _episodeLabel.firstMatch(title);
++      final labelNumber = label == null
++          ? int.tryParse(title.trim())
++          : int.tryParse(label.group(1) ?? label.group(2) ?? '');
++      final explicit = row['episodeNumber']?.toString().trim();
++      final actual = explicit == null || explicit.isEmpty
++          ? labelNumber
++          : num.tryParse(explicit);
++      if (actual == number &&
++          (labelNumber == null || labelNumber == number) &&
++          row['episodeId'] is int) {
++        ids.add(row['episodeId'] as int);
++      }
++    }
++    return ids.length == 1 ? ids.single : null;
++  }
++
++  static Future<int?> findEpisode(int showId, int number) async =>
++      episodeId(await _episodes(showId), number);
++}
+diff --git a/lib/request/apis/danmaku_api.dart b/lib/request/apis/danmaku_api.dart
+index 914d59c..11513e9 100644
+--- a/lib/request/apis/danmaku_api.dart
++++ b/lib/request/apis/danmaku_api.dart
+@@ -3,6 +3,9 @@ import 'package:kazumi/modules/danmaku/danmaku_episode_response.dart';
+ import 'package:kazumi/modules/danmaku/danmaku_module.dart';
+ import 'package:kazumi/modules/danmaku/danmaku_search_response.dart';
+ import 'package:kazumi/request/clients/danmaku_client.dart';
++import 'package:kazumi/request/apis/community_danmaku.dart';
++import 'package:kazumi/request/core/dio_factory.dart';
++import 'package:kazumi/utils/dandan_credentials.dart';
+ import 'package:kazumi/request/config/api_endpoints.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+@@ -10,7 +13,12 @@ import 'package:kazumi/services/storage/storage.dart';
+ class DanmakuApi {
+   static final DanmakuClient _client = DanmakuClient.instance;
+ 
+-  static Future<int> getDanDanBangumiIDByBgmBangumiID(int bgmBangumiID) async {
++  static bool get _community =>
++      dandanCredentials['id']!.isEmpty || dandanCredentials['value']!.isEmpty;
++
++  static Future<int> getDanDanBangumiIDByBgmBangumiID(int bgmBangumiID,
++      {List<String> titles = const []}) async {
++    if (_community) return CommunityDanmaku.matchTitle(titles);
+     final path = ApiEndpoints.formatUrl(
+       ApiEndpoints.dandanAPIInfoByBgmBangumiId,
+       [bgmBangumiID],
+@@ -23,6 +31,7 @@ class DanmakuApi {
+   static Future<DanmakuEpisodeResponse> getDanDanEpisodesByDanDanBangumiID(
+     int bangumiID,
+   ) async {
++    if (_community) return CommunityDanmaku.catalogue(bangumiID);
+     final path = ApiEndpoints.dandanAPIInfo + bangumiID.toString();
+     final endPoint = ApiEndpoints.dandanAPIDomain + path;
+     final jsonData = await _client.get(endPoint);
+@@ -32,6 +41,7 @@ class DanmakuApi {
+   // v2 episode search avoids the anime search's 25-result cap.
+   // Fetch full episode lists separately; search results can truncate them.
+   static Future<DanmakuSearchResponse> searchAnimes(String title) async {
++    if (_community) return CommunityDanmaku.search(title);
+     final endPoint =
+         ApiEndpoints.dandanAPIDomain + ApiEndpoints.dandanAPISearchEpisodes;
+     final jsonData = await _client.get(
+@@ -48,6 +58,10 @@ class DanmakuApi {
+     if (bangumiID == 0) {
+       return [];
+     }
++    if (_community) {
++      final id = await CommunityDanmaku.findEpisode(bangumiID, episode);
++      return id == null ? <DanmakuEntry>[] : _getComments(id.toString());
++    }
+     // Automatic matching relies on an undocumented episode ID convention.
+     return _getComments('$bangumiID${episode.toString().padLeft(4, '0')}');
+   }
+@@ -56,19 +70,16 @@ class DanmakuApi {
+       _getComments(episodeID.toString());
+ 
+   static Future<List<DanmakuEntry>> _getComments(String episodeID) async {
+-    final endPoint =
+-        '${ApiEndpoints.dandanAPIDomain}${ApiEndpoints.dandanAPIComment}$episodeID';
++    final origin = _community ? CommunityDanmaku.origin : ApiEndpoints.dandanAPIDomain;
++    final endPoint = '$origin${ApiEndpoints.dandanAPIComment}$episodeID';
+     final conversion = DanmakuChConvert.fromValue(
+       GStorage.getSetting(SettingsKeys.danmakuChConvert),
+     );
+     KazumiLogger().i('Danmaku: final request URL $endPoint');
+-    final jsonData = await _client.get(
+-      endPoint,
+-      queryParameters: {
+-        'withRelated': 'true',
+-        'chConvert': conversion.value.toString(),
+-      },
+-    );
++    final query = {'withRelated': 'true', 'chConvert': conversion.value.toString()};
++    final jsonData = _community
++        ? (await DioFactory.apiDio.get(endPoint, queryParameters: query)).data
++        : await _client.get(endPoint, queryParameters: query);
+     final List<dynamic> comments = jsonData['comments'];
+     return [for (final comment in comments) DanmakuEntry.fromJson(comment)];
+   }
+diff --git a/lib/request/clients/bangumi_client.dart b/lib/request/clients/bangumi_client.dart
+index 6fd4a5e..7589b59 100644
+--- a/lib/request/clients/bangumi_client.dart
++++ b/lib/request/clients/bangumi_client.dart
+@@ -27,6 +27,7 @@ class BangumiClient {
+         url,
+         queryParameters: queryParameters,
+         options: Options(
++          followRedirects: requiresAuth ? false : null,
+           headers: _headers(
+             requiresAuth: requiresAuth,
+             accessToken: accessToken,
+@@ -55,6 +56,7 @@ class BangumiClient {
+         data: data,
+         queryParameters: queryParameters,
+         options: Options(
++          followRedirects: requiresAuth ? false : null,
+           headers: _headers(
+             requiresAuth: requiresAuth,
+             url: url,
+@@ -78,17 +80,18 @@ class BangumiClient {
+     Object? data,
+   }) {
+     final headers = <String, dynamic>{...bangumiHTTPHeader};
+-    final bangumiSyncEnable = GStorage.getSetting(
+-      SettingsKeys.bangumiSyncEnable,
+-    );
+-    final token =
+-        (accessToken ??
+-                GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken))
+-            .trim();
+-    if ((requiresAuth || bangumiSyncEnable) && token.isNotEmpty) {
+-      headers['Authorization'] = 'Bearer $token';
++    if (requiresAuth) {
++      final uri = Uri.parse(url);
++      if (uri.origin != ApiEndpoints.bangumiAPIDomain) {
++        throw ArgumentError('Bangumi account requests require its official HTTPS origin');
++      }
++      final token = (accessToken ??
++              GStorage.getSetting<String>(SettingsKeys.bangumiAccessToken))
++          .trim();
++      if (token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+     }
+-    if (_shouldSignProtectedMirrorRequest(url, method)) {
++    if (!headers.containsKey('Authorization') &&
++        _shouldSignProtectedMirrorRequest(url, method)) {
+       final timestamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+       final body = data == null ? '' : jsonEncode(data);
+       headers['X-AppId'] = bangumiMirrorCredentials['id'];
+@@ -105,19 +108,9 @@ class BangumiClient {
+ 
+   bool _shouldSignProtectedMirrorRequest(String url, String method) {
+     final uri = Uri.parse(url);
+-    if (BangumiAcceleration.current != BangumiAcceleration.mirror ||
+-        !ApiEndpoints.bangumiPublicApiHosts.contains(uri.host)) {
+-      return false;
+-    }
+-    final path = uri.path;
+-    if (method == 'POST' && path == '/v0/search/subjects') {
+-      return true;
+-    }
+-    if (method != 'GET') {
+-      return false;
+-    }
+-    return path.startsWith('/p1/subjects/') && path.endsWith('/comments') ||
+-        path.startsWith('/p1/episodes/') && path.endsWith('/comments') ||
+-        path.startsWith('/p1/characters/') && path.endsWith('/comments');
++    return hasBangumiMirrorCredentials &&
++        BangumiAcceleration.current == BangumiAcceleration.mirror &&
++        ApiEndpoints.bangumiPublicApiHosts.contains(uri.host) &&
++        isProtectedBangumiMirrorRequest(method, uri.path);
+   }
+ }
+diff --git a/lib/request/core/acceleration_interceptors.dart b/lib/request/core/acceleration_interceptors.dart
+index a860c05..ffb2e52 100644
+--- a/lib/request/core/acceleration_interceptors.dart
++++ b/lib/request/core/acceleration_interceptors.dart
+@@ -3,6 +3,7 @@ import 'package:kazumi/request/config/api_endpoints.dart';
+ import 'package:kazumi/request/core/ech_adapter.dart';
+ import 'package:kazumi/services/network/bangumi_acceleration.dart';
+ import 'package:kazumi/services/network/rules_mirror.dart';
++import 'package:kazumi/utils/bangumi_mirror_credentials.dart';
+ 
+ class BangumiAccelerationInterceptor extends Interceptor {
+   @override
+@@ -17,6 +18,14 @@ class BangumiAccelerationInterceptor extends Interceptor {
+           options.queryParameters = {};
+           options.requireEch();
+         case BangumiAcceleration.mirror:
++          // The mirror requires its own credentials on these routes. Account
++          // tokens always belong to the official Bangumi host.
++          if (options.headers.containsKey('Authorization') ||
++              (!hasBangumiMirrorCredentials &&
++                  isProtectedBangumiMirrorRequest(options.method, uri.path))) {
++            options.requireEch();
++            break;
++          }
+           options.path =
+               ApiEndpoints.bangumiMirrorDomain +
+               uri.path +
+diff --git a/lib/services/download/background_download_service.dart b/lib/services/download/background_download_service.dart
+index 7f83781..ed9126d 100644
+--- a/lib/services/download/background_download_service.dart
++++ b/lib/services/download/background_download_service.dart
+@@ -106,6 +106,7 @@ class BackgroundDownloadService {
+       final result = await FlutterForegroundTask.startService(
+         notificationTitle: '正在下载',
+         notificationText: '准备中...',
++        notificationInitialRoute: '/anon-anime-downloads',
+         notificationButtons: [
+           const NotificationButton(id: 'pause_all', text: '暂停全部'),
+         ],
+@@ -228,8 +229,7 @@ class _DownloadTaskHandler extends TaskHandler {
+ 
+   @override
+   void onNotificationPressed() {
+-    FlutterForegroundTask.sendDataToMain({'action': 'navigate_to_download'});
+-    FlutterForegroundTask.launchApp();
++    FlutterForegroundTask.launchApp('/anon-anime-downloads');
+   }
+ 
+   @override
+diff --git a/lib/services/platform/app_exit.dart b/lib/services/platform/app_exit.dart
+index d5ca371..ac718ab 100644
+--- a/lib/services/platform/app_exit.dart
++++ b/lib/services/platform/app_exit.dart
+@@ -1,11 +1,16 @@
+ import 'dart:io';
++import 'package:flutter/services.dart';
+ 
+ import 'package:kazumi/services/platform/tray_service.dart';
+ 
+ class AppExit {
+   AppExit._();
+ 
+-  static Future<Never> quit() async {
++  static Future<void> quit() async {
++    if (Platform.isAndroid) {
++      await SystemNavigator.pop();
++      return;
++    }
+     try {
+       await TrayService.dispose();
+     } finally {
+diff --git a/lib/services/storage/settings_keys.dart b/lib/services/storage/settings_keys.dart
+index 2c71bb6..f3ab511 100644
+--- a/lib/services/storage/settings_keys.dart
++++ b/lib/services/storage/settings_keys.dart
+@@ -188,7 +188,7 @@ class SettingsKeys {
+   );
+   static const danmakuEnabledByDefault = SettingKey<bool>(
+     _SettingBoxKey.danmakuEnabledByDefault,
+-    false,
++    true,
+     group: SettingGroup.danmaku,
+   );
+   static const danmakuBiliBiliSource = SettingKey<bool>(
+diff --git a/lib/utils/bangumi_mirror_credentials.dart b/lib/utils/bangumi_mirror_credentials.dart
+index 136c085..98148d8 100644
+--- a/lib/utils/bangumi_mirror_credentials.dart
++++ b/lib/utils/bangumi_mirror_credentials.dart
+@@ -4,3 +4,15 @@ const Map<String, String> bangumiMirrorCredentials = {
+   'id': String.fromEnvironment('KAZUMI_APPID'),
+   'value': String.fromEnvironment('KAZUMI_KEY'),
+ };
++
++bool get hasBangumiMirrorCredentials =>
++    bangumiMirrorCredentials['id']!.isNotEmpty &&
++    bangumiMirrorCredentials['value']!.isNotEmpty;
++
++bool isProtectedBangumiMirrorRequest(String method, String path) {
++  if (method == 'POST') return path == '/v0/search/subjects';
++  if (method != 'GET' || !path.endsWith('/comments')) return false;
++  return path.startsWith('/p1/subjects/') ||
++      path.startsWith('/p1/episodes/') ||
++      path.startsWith('/p1/characters/');
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 61518c6..36f40db 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -157,6 +157,8 @@ msix_config:
+ flutter:
+   uses-material-design: true
+   assets:
++    - assets/anon/anime-popular-2026-11-21.json
++    - assets/anon/posters/
+     - assets/images/
+     - assets/shaders/
+     - assets/images/logo/
+diff --git a/test/anon_community_danmaku_test.dart b/test/anon_community_danmaku_test.dart
+new file mode 100644
+index 0000000..b960d0e
+--- /dev/null
++++ b/test/anon_community_danmaku_test.dart
+@@ -0,0 +1,45 @@
++import 'package:flutter_test/flutter_test.dart';
++import 'package:kazumi/request/apis/community_danmaku.dart';
++import 'package:kazumi/utils/bangumi_mirror_credentials.dart';
++
++void main() {
++  test(
++    'selects the actual episode ID even with specials and nonconsecutive IDs',
++    () {
++      final episodes = [
++        {'episodeTitle': '特典', 'episodeNumber': '1', 'episodeId': 5},
++        {'episodeTitle': '第1话 羽丘的怪女孩', 'episodeNumber': '1', 'episodeId': 84},
++        {'episodeTitle': 'EP.2', 'episodeId': 190},
++      ];
++      expect(CommunityDanmaku.episodeId(episodes, 1), 84);
++      expect(CommunityDanmaku.episodeId(episodes, 2), 190);
++      expect(CommunityDanmaku.episodeId(episodes, 3), isNull);
++      expect(
++        CommunityDanmaku.episodeId([
++          ...episodes,
++          {'episodeTitle': '第1话', 'episodeId': 234},
++        ], 1),
++        isNull,
++      );
++    },
++  );
++
++  test('distinguishes the signed mirror routes from public catalogues', () {
++    expect(
++      isProtectedBangumiMirrorRequest('POST', '/v0/search/subjects'),
++      isTrue,
++    );
++    expect(
++      isProtectedBangumiMirrorRequest('GET', '/p1/episodes/42/comments'),
++      isTrue,
++    );
++    expect(
++      isProtectedBangumiMirrorRequest('GET', '/p1/characters/7/comments'),
++      isTrue,
++    );
++    expect(
++      isProtectedBangumiMirrorRequest('GET', '/p1/trending/subjects'),
++      isFalse,
++    );
++  });
++}
+diff --git a/test/bangumi_sync_service_test.dart b/test/bangumi_sync_service_test.dart
+index d39de6c..e9c39c1 100644
+--- a/test/bangumi_sync_service_test.dart
++++ b/test/bangumi_sync_service_test.dart
+@@ -9,6 +9,7 @@ import 'package:hive_ce/hive.dart';
+ import 'package:kazumi/pages/collect/collect_controller.dart';
+ import 'package:kazumi/repositories/collect_crud_repository.dart';
+ import 'package:kazumi/request/clients/bangumi_client.dart';
++import 'package:kazumi/request/apis/bangumi_api.dart';
+ import 'package:kazumi/request/core/dio_factory.dart';
+ import 'package:kazumi/request/core/network_exception.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+@@ -77,6 +78,7 @@ void main() {
+   test('enabling sends authorization while sync is disabled', () async {
+     await GStorage.putSetting(SettingsKeys.bangumiSyncEnable, false);
+     await bangumi.setEnabled(true);
++    expect(adapter.requests.single.uri, Uri.parse('https://api.bgm.tv/v0/me'));
+     expect(
+         adapter.requests.single.headers['Authorization'], 'Bearer saved-token');
+     expect(GStorage.getSetting(SettingsKeys.bangumiSyncEnable), isTrue);
+@@ -96,6 +98,7 @@ void main() {
+       'https://next.bgm.tv/p1/subjects/1?test=value',
+     ]) {
+       await BangumiClient.instance.get(url);
++      expect(adapter.requests.last.headers.containsKey('Authorization'), isFalse);
+       expect(
+         adapter.requests.last.uri,
+         Uri.parse(url).replace(host: 'api.kazumi.fyi'),
+@@ -103,12 +106,41 @@ void main() {
+     }
+   });
+ 
++  test('detail keeps public requests anonymous and reads the viewer review from the official account API', () async {
++    await GStorage.putSetting(SettingsKeys.enableBangumiProxy, true);
++    var collected = true;
++    adapter.respond = (request) async {
++      if (request.uri.path == '/v0/users/saved-user/collections/123') {
++        expect(request.uri.host, 'api.bgm.tv');
++        expect(request.headers['Authorization'], 'Bearer saved-token');
++        return collected ? _json({
++          'subject_id': 123, 'rate': 9, 'comment': '我的短评', 'private': true,
++          'tags': ['音乐'], 'ep_status': 4, 'updated_at': '2026-01-02T03:04:05Z',
++        }) : _json({}, status: 404);
++      }
++      expect(request.headers.containsKey('Authorization'), isFalse);
++      expect(request.uri.host, 'api.kazumi.fyi');
++      return _json({'id': 123, 'name': '番剧', 'rating': {}, 'images': <String,String>{}});
++    };
++    expect((await BangumiApi.getBangumiInfoByID(123))?.interest, isNull);
++    expect(adapter.requests.length, 1);
++    final item = await BangumiApi.getBangumiInfoByID(123, viewer: 'saved-user');
++    expect(item?.interest?.rate, 9);
++    expect(item?.interest?.comment, '我的短评');
++    expect(item?.interest?.epStatus, 4);
++    collected = false;
++    final uncollected = await BangumiApi.getBangumiInfoByID(123, viewer: 'saved-user');
++    expect(uncollected?.id, 123);
++    expect(uncollected?.interest, isNull);
++  });
++
+   test('failed draft validation preserves credentials and connected account',
+       () async {
+     await bangumi.ping();
+     adapter.respond = (_) async => _json({}, status: 401);
+     await expectLater(
+         bangumi.saveToken('invalid-draft'), throwsA(isA<NetworkException>()));
++    expect(adapter.requests.last.uri, Uri.parse('https://api.bgm.tv/v0/me'));
+     expect(
+         adapter.requests.last.headers['Authorization'], 'Bearer invalid-draft');
+     expect(GStorage.getSetting(SettingsKeys.bangumiAccessToken), 'saved-token');
+@@ -132,6 +164,10 @@ void main() {
+     await started.future;
+     expect(GStorage.getSetting(SettingsKeys.bangumiAccessToken), 'saved-token');
+     await BangumiClient.instance.get('https://api.bgm.tv/v0/subjects/1');
++    expect(adapter.requests.last.headers.containsKey('Authorization'), isFalse);
++    await BangumiClient.instance.get(
++        'https://api.bgm.tv/v0/users/saved-user/collections',
++        requiresAuth: true);
+     expect(
+         adapter.requests.last.headers['Authorization'], 'Bearer saved-token');
+     response.complete(_user('replacement-user'));

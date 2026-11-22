@@ -1,0 +1,28 @@
+anon toolkyo · 动画增强播放器
+
+libmpv 及其原生依赖
+本应用可选使用 libmpv 播放视频。附带的二进制来自 Predidit/libmpv-android-video-build v1.3.1 的 default 构建，包含 arm64-v8a 和 x86_64。构建关闭了 mpv 的 GPL 功能。FFmpeg 的分发许可为 LGPL 第 3 版或更新版本，详见 mpv-lgpl-3.0.txt 与 mpv-gpl-3.0.txt。
+
+二进制发布、构建脚本和补丁
+https://github.com/Predidit/libmpv-android-video-build/releases/tag/v1.3.1
+https://github.com/Predidit/libmpv-android-video-build/tree/v1.3.1/buildscripts
+https://github.com/Predidit/libmpv-android-video-build/blob/v1.3.1/buildscripts/include/depinfo.sh
+
+对应源码
+mpv: https://github.com/mpv-player/mpv/tree/c3ac7f39514c7f45bc38a18e66887240539ee33c
+FFmpeg: https://github.com/FFmpeg/FFmpeg/tree/24e860f6d3c4f2ebae65ed7649e2a8860d512879
+其余依赖的版本、提交和获取路径均在上述固定版本的构建脚本中。与本应用一起使用修改版本时，可替换项目 app/src/main/jniLibs 对应架构下的 libmpv.so 后重新构建 APK。
+
+原始构建产物的 SHA-256
+default-arm64-v8a.jar 3bbceecd7616d5730e19865342a020834f00bdf77c25900e97c91a6e3e8141f8
+default-x86_64.jar    f01e9f1890091f4dd856cd37247e442d151b7815a86306581a1e9317ec566136
+
+media-kit Android Helper
+与 libmpv 同一构建产物中的原生 Surface JNI 接口。MIT 许可全文见 mpv-helper-license.txt。
+https://github.com/Predidit/media-kit-android-helper/tree/b768ce102cfa9b5ddec618bb939d689d1b0899fa
+
+Java Native Access 5.17.0
+使用 Maven Central 的 net.java.dev.jna:jna:5.17.0@aar，由 Apache License 2.0 许可。双许可声明和采用的许可分别见 jna-license.txt、jna-apache-2.0.txt。
+https://github.com/java-native-access/jna/tree/5.17.0
+https://repo.maven.apache.org/maven2/net/java/dev/jna/jna/5.17.0/
+SHA-256 4dbeffffa665d97ad5aa7eee297531d3c841a86716ab7f774fd6956422b3cf38

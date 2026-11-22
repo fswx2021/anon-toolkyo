@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">anon toolkyo</string>
+    <string name="anime_demo_description">%1$s · 视频试播</string>
+    <string name="track_count">%1$d 首音频</string>
+    <string name="reader_source_count">%1$d 个%2$s已启用</string>
+    <string name="anime_danmaku_count">弹幕 · %1$d 条</string>
+    <string name="anime_danmaku_loaded">已加载 %1$d 条弹幕，按当前筛选显示 %2$d 条</string>
+</resources>

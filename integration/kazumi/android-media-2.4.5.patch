@@ -1,0 +1,13 @@
+diff --git a/lib/services/player/audio_controller.dart b/lib/services/player/audio_controller.dart
+--- a/lib/services/player/audio_controller.dart
++++ b/lib/services/player/audio_controller.dart
+@@ -53,7 +53,8 @@ class AudioController {
+       },
+       config: const AudioServiceConfig(
+         androidNotificationChannelId: 'io.github.Predidit.Kazumi.channel.audio',
+-        androidNotificationChannelName: 'Kazumi Playback',
++        androidNotificationChannelName: '动画播放',
++        androidNotificationIcon: 'drawable/ic_media_notification',
+         androidNotificationOngoing: true,
+       ),
+     );

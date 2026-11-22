@@ -1,0 +1,6 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/launcher_background" />
+    <item>
+        <bitmap android:src="@drawable/anon_avatar" android:gravity="fill" />
+    </item>
+</layer-list>

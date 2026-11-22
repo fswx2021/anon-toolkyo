@@ -1,0 +1,17 @@
+{
+  "bookSourceName": "声笺试读 · 漫画",
+  "bookSourceUrl": "https://reader-demo.shengjian.invalid/comics/",
+  "bookSourceType": "漫画",
+  "enable": true,
+  "ruleFindUrl": "离线试读::index.json",
+  "ruleFindList": "$.books[*]",
+  "ruleFindName": "$.name",
+  "ruleFindAuthor": "$.author",
+  "ruleFindIntroduce": "$.intro",
+  "ruleFindCoverUrl": "$.cover",
+  "ruleFindNoteUrl": "$.url",
+  "ruleChapterList": "$.chapters[*]",
+  "ruleChapterName": "$.title",
+  "ruleContentUrl": "$.url",
+  "ruleBookContent": "@js:JSON.parse(result).pages"
+}

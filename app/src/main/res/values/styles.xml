@@ -1,0 +1,29 @@
+<resources>
+    <style name="PlayerThemeBase" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#BF3D50</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="PlayerTheme" parent="PlayerThemeBase">
+        <item name="android:navigationBarColor">#202124</item>
+    </style>
+    <style name="PlayerDarkTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#F299A6</item>
+        <item name="android:colorBackground">#191A1C</item>
+        <item name="android:windowBackground">#191A1C</item>
+        <item name="android:statusBarColor">#191A1C</item>
+        <item name="android:navigationBarColor">#191A1C</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+    <style name="AnimePlayerPanelLight" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">#BF3D50</item>
+    </style>
+    <style name="AnimePlayerPanelDark" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">#F299A6</item>
+    </style>
+</resources>

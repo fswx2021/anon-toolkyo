@@ -1,0 +1,465 @@
+diff --git a/lib/pages/init_page.dart b/lib/pages/init_page.dart
+--- a/lib/pages/init_page.dart
++++ b/lib/pages/init_page.dart
+@@ -6,6 +6,7 @@
+ import 'package:kazumi/services/sync/bangumi_sync_service.dart';
+ import 'package:kazumi/services/sync/danmaku_shield_sync_service.dart';
+ import 'package:kazumi/services/sync/webdav.dart';
++import 'package:kazumi/services/storage/anon_legacy_import.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+ import 'package:kazumi/plugins/plugins_controller.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+@@ -57,6 +58,8 @@
+   }
+ 
+   Future<void> _initializeApp() async {
++    await AnonLegacyImport.importDanmakuPreference();
++    await AnonLegacyImport.importFavorites();
+     widget.danmakuShieldSync.start();
+     _migrateStorage();
+     _loadShaders();
+@@ -275,6 +278,7 @@
+   Future<void> _pluginInit() async {
+     try {
+       await pluginsController.init();
++      await AnonLegacyImport.importRules(pluginsController);
+       unawaited(_pluginUpdate());
+     } catch (error, stackTrace) {
+       KazumiLogger().e(
+diff --git a/lib/services/storage/anon_legacy_import.dart b/lib/services/storage/anon_legacy_import.dart
+new file mode 100644
+--- /dev/null
++++ b/lib/services/storage/anon_legacy_import.dart
+@@ -0,0 +1,107 @@
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:flutter/services.dart';
++import 'package:kazumi/modules/bangumi/bangumi_item.dart';
++import 'package:kazumi/modules/collect/collect_type.dart';
++import 'package:kazumi/plugins/plugins.dart';
++import 'package:kazumi/plugins/plugins_controller.dart';
++import 'package:kazumi/repositories/collect_crud_repository.dart';
++import 'package:kazumi/services/logging/logger.dart';
++import 'package:kazumi/services/plugin/plugin_import_parser.dart';
++import 'package:kazumi/services/storage/storage.dart';
++import 'package:path_provider/path_provider.dart';
++
++class AnonLegacyImport {
++  static const _legacy = MethodChannel('com.shengjian.player/legacy-anime');
++
++  // Android path_provider's application support directory is Context.getFilesDir().
++  // Commit the marker after all writes. Existing rules and collections win on retry.
++  static Future<void> _once(
++    String name,
++    Future<bool> Function(Directory) migrate,
++  ) async {
++    if (!Platform.isAndroid) return;
++    try {
++      final directory = await getApplicationSupportDirectory();
++      final marker = File('${directory.path}/anon-import-v1-$name.done');
++      if (await marker.exists()) return;
++      if (await migrate(directory)) await marker.create();
++    } catch (error, stack) {
++      KazumiLogger().w('ANON: $name migration will be retried',
++          error: error, stackTrace: stack);
++    }
++  }
++
++  static List<Plugin> pendingRules(List<dynamic> rows, Set<String> existing) {
++    final definitions = [
++      for (final row in rows)
++        if (row is Map && row['enabled'] != false && row['rule'] is Map)
++          row['rule'],
++    ];
++    final parsed = PluginImportParser.parse(jsonEncode(definitions));
++    return parsed.plugins
++        .where((rule) => !existing.contains(pluginNameKey(rule.name)))
++        .toList();
++  }
++
++  static Future<void> importRules(PluginsController plugins) =>
++      _once('rules', (directory) async {
++        final file = File('${directory.path}/anime-sources.json');
++        if (!await file.exists()) return false;
++        final rows = jsonDecode(await file.readAsString()) as List;
++        if (rows.isEmpty) return false;
++        final existing = plugins.pluginList.map((p) => pluginNameKey(p.name)).toSet();
++        final pending = pendingRules(rows, existing);
++        if (pending.isNotEmpty) await plugins.updatePlugins(pending);
++        return true;
++      });
++
++  static Map<int, (BangumiItem, CollectType)> favorites(List<dynamic> rows) {
++    // Old ANON writes the newest row first and can have several sources per work.
++    final works = <int, (BangumiItem, CollectType)>{};
++    for (final row in rows.whereType<Map>()) {
++      final id = row['bangumi'];
++      final title = row['title'];
++      if (id is! int || id <= 0 || works.containsKey(id) ||
++          title is! String || title.trim().isEmpty) continue;
++      final status = switch (row['status']) {
++        'watching' => CollectType.watching,
++        'completed' => CollectType.watched,
++        'paused' => CollectType.onHold,
++        'dropped' => CollectType.abandoned,
++        _ => CollectType.planToWatch,
++      };
++      final cover = row['cover'] is String ? row['cover'] as String : '';
++      final work = BangumiItem.fromJson({
++        'id': id,
++        'name': title.trim(),
++        'rating': <String, dynamic>{},
++        'images': {for (final size in ['large', 'common', 'medium', 'small', 'grid']) size: cover},
++      });
++      works[id] = (work, status);
++    }
++    return works;
++  }
++
++  static Future<void> importDanmakuPreference() => _once('danmaku', (_) async {
++        final enabled = await _legacy.invokeMethod<bool>('danmakuVisible');
++        if (enabled != null) {
++          await GStorage.putSettingIfAbsent(SettingsKeys.danmakuEnabledByDefault, enabled);
++        }
++        return true;
++      });
++
++  static Future<void> importFavorites() => _once('favorites', (_) async {
++        final value = await _legacy.invokeMethod<String>('favorites');
++        final rows = jsonDecode(value ?? '[]') as List;
++        if (rows.isEmpty) return false;
++        final repository = CollectCrudRepository();
++        for (final (work, status) in favorites(rows).values.toList().reversed) {
++          if (repository.getCollectible(work.id) == null) {
++            await repository.addCollectible(work, status.value);
++          }
++        }
++        return true;
++      });
++}
+diff --git a/test/anon_legacy_import_test.dart b/test/anon_legacy_import_test.dart
+new file mode 100644
+--- /dev/null
++++ b/test/anon_legacy_import_test.dart
+@@ -0,0 +1,30 @@
++import 'package:flutter_test/flutter_test.dart';
++import 'package:kazumi/modules/collect/collect_type.dart';
++import 'package:kazumi/services/storage/anon_legacy_import.dart';
++
++void main() {
++  test('skip disabled, incompatible and already installed rules', () {
++    final rules = AnonLegacyImport.pendingRules([
++      {'rule': {'name': 'Existing'}},
++      {'enabled': false, 'rule': {'name': 'Disabled'}},
++      {'rule': {'name': 'Too new', 'api': '9999'}},
++      {'rule': {'name': 'Imported', 'version': '1'}},
++      {'rule': {'name': 'Imported', 'version': '2'}},
++    ], {'existing'});
++    expect(rules.map((p) => p.name), ['Imported']);
++    expect(rules.single.version, '2');
++  });
++
++  test('a confirmed subject ID wins across sources and guessed titles do not migrate', () {
++    final works = AnonLegacyImport.favorites([
++      {'bangumi': 9, 'title': 'Current title', 'status': 'completed'},
++      {'bangumi': 9, 'title': 'Older title', 'status': 'watching'},
++      {'bangumi': 0, 'title': 'Unmatched'},
++      {'bangumi': 1, 'title': 'Before status was added'},
++    ]);
++    expect(works.keys.toList(), [9, 1]);
++    expect(works[9]!.$1.name, 'Current title');
++    expect(works[9]!.$2, CollectType.watched);
++    expect(works[1]!.$2, CollectType.planToWatch);
++  });
++}
+diff --git a/lib/services/deep_links/kazumi_deep_link.dart b/lib/services/deep_links/kazumi_deep_link.dart
+--- a/lib/services/deep_links/kazumi_deep_link.dart
++++ b/lib/services/deep_links/kazumi_deep_link.dart
+@@ -9,6 +9,12 @@
+         final id = int.tryParse(raw);
+         // Plain digits only: no sign, whitespace or leading zeros.
+         if (id != null && id > 0 && '$id' == raw) return BangumiDeepLink(id);
++      }
++      if (uri.authority == 'downloads' && uri.path.isEmpty &&
++          !uri.hasQuery && !uri.hasFragment) return const DownloadsDeepLink();
++      if (uri.host == 'import') {
++        final rule = uri.queryParameters['rule'] ?? '';
++        if (rule.isNotEmpty) return RuleDeepLink(rule);
+       }
+       if (uri.host == 'search') {
+         final query = uri.queryParameters['query']?.trim() ?? '';
+@@ -26,6 +32,15 @@
+   final int id;
+ }
+ 
++final class DownloadsDeepLink extends KazumiDeepLink {
++  const DownloadsDeepLink();
++}
++
++final class RuleDeepLink extends KazumiDeepLink {
++  const RuleDeepLink(this.rule);
++  final String rule;
++}
++
+ final class SearchDeepLink extends KazumiDeepLink {
+   const SearchDeepLink(this.query);
+   final String query;
+diff --git a/lib/services/deep_links/app_deep_links.dart b/lib/services/deep_links/app_deep_links.dart
+--- a/lib/services/deep_links/app_deep_links.dart
++++ b/lib/services/deep_links/app_deep_links.dart
+@@ -72,6 +72,10 @@
+           }
+           _push(session, '/info/', arguments: item);
+         });
++      case DownloadsDeepLink():
++        _push(session, '/settings/download/');
++      case RuleDeepLink(:final rule):
++        _push(session, '/settings/plugin/', arguments: rule);
+       case SearchDeepLink(:final query):
+         final route = Uri(path: '/search/', queryParameters: {'query': query});
+         _push(session, route.toString());
+diff --git a/lib/pages/plugin_editor/plugin_module.dart b/lib/pages/plugin_editor/plugin_module.dart
+--- a/lib/pages/plugin_editor/plugin_module.dart
++++ b/lib/pages/plugin_editor/plugin_module.dart
+@@ -15,6 +15,7 @@
+         '/',
+         child: (context, state) => PluginViewPage(
+           controller: inject<PluginsController>(),
++          importLink: state.arguments is String ? state.arguments as String : null,
+         ),
+       )
+       ..route(
+diff --git a/lib/pages/plugin_editor/plugin_view_page.dart b/lib/pages/plugin_editor/plugin_view_page.dart
+--- a/lib/pages/plugin_editor/plugin_view_page.dart
++++ b/lib/pages/plugin_editor/plugin_view_page.dart
+@@ -23,8 +23,9 @@
+ import 'package:kazumi/services/plugin/plugin_import_parser.dart';
+ 
+ class PluginViewPage extends StatefulWidget {
+-  const PluginViewPage({super.key, required this.controller});
++  const PluginViewPage({super.key, required this.controller, this.importLink});
+   final PluginsController controller;
++  final String? importLink;
+ 
+   @override
+   State<PluginViewPage> createState() => _PluginViewPageState();
+@@ -45,6 +46,12 @@
+   void initState() {
+     super.initState();
+     unawaited(_loadUpdateStatus());
++    final link = widget.importLink;
++    if (link != null && link.isNotEmpty) {
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        if (mounted) unawaited(showRuleImportDialog(context, _controller, initialValue: link));
++      });
++    }
+   }
+ 
+   @override
+diff --git a/lib/plugins/plugins_controller.dart b/lib/plugins/plugins_controller.dart
+--- a/lib/plugins/plugins_controller.dart
++++ b/lib/plugins/plugins_controller.dart
+@@ -436,14 +436,21 @@
+ 
+   Future<PluginBatchUpdateResult> tryUpdateAllPlugin({
+     bool ensureCatalog = true,
++    bool installMissing = false,
++    void Function(int done, int total)? onProgress,
+   }) {
++    final repository = ruleRepository;
+     return _mutations.run(
+-      () => _tryUpdateAllPlugin(ensureCatalog: ensureCatalog),
++      () => _tryUpdateAllPlugin(ensureCatalog: ensureCatalog,
++          installMissing: installMissing, repository: repository, onProgress: onProgress),
+     );
+   }
+ 
+   Future<PluginBatchUpdateResult> _tryUpdateAllPlugin({
+     required bool ensureCatalog,
++    required bool installMissing,
++    required String repository,
++    void Function(int, int)? onProgress,
+   }) async {
+     if (ensureCatalog) {
+       await ensurePluginCatalog();
+@@ -451,13 +458,20 @@
+       throw StateError('Plugin catalog has not been loaded');
+     }
+ 
+-    final repository = ruleRepository;
+-    final candidates = _updatablePluginNames();
+-    final attempts = await _preparePluginUpdates(repository, candidates);
++    if (repository != ruleRepository) throw StateError('规则仓库已切换');
++    // An installed rule may have been edited locally. Bulk import only fills gaps.
++    final candidates = installMissing
++        ? [for (final item in _pluginCatalogByName.values)
++            if (pluginStatus(item) == PluginCatalogItemStatus.install) item.name]
++        : _updatablePluginNames();
++    final retained = installMissing ? _pluginCatalogByName.length - candidates.length : 0;
++    onProgress?.call(0, candidates.length);
++    final attempts = await _preparePluginUpdates(repository, candidates, onProgress: onProgress);
++    if (repository != ruleRepository) throw StateError('规则仓库已切换');
+     var updated = 0;
+     var requiresNewerClient = 0;
+     var failed = 0;
+-    var notNewer = 0;
++    var notNewer = retained;
+ 
+     final updatedPlugins = <Plugin>[];
+     for (final attempt in attempts) {
+@@ -495,18 +509,21 @@
+ 
+   Future<List<_PluginUpdateAttempt>> _preparePluginUpdates(
+     String repository,
+-    List<String> names,
+-  ) async {
++    List<String> names, {
++    void Function(int, int)? onProgress,
++  }) async {
+     if (names.isEmpty) {
+       return const [];
+     }
+     final results = List<_PluginUpdateAttempt?>.filled(names.length, null);
+     var nextIndex = 0;
++    var completed = 0;
+ 
+     Future<void> worker() async {
+       while (nextIndex < names.length) {
+         final index = nextIndex++;
+         results[index] = await _preparePluginUpdate(repository, names[index]);
++        onProgress?.call(++completed, names.length);
+       }
+     }
+ 
+diff --git a/lib/pages/plugin_editor/plugin_catalog_view.dart b/lib/pages/plugin_editor/plugin_catalog_view.dart
+--- a/lib/pages/plugin_editor/plugin_catalog_view.dart
++++ b/lib/pages/plugin_editor/plugin_catalog_view.dart
+@@ -51,6 +51,8 @@
+   _CatalogFilter _filter = _CatalogFilter.all;
+   bool _loading = true;
+   bool _loadFailed = false;
++  bool _aggregating = false;
++  String _aggregation = '';
+ 
+   PluginsController get _controller => widget.controller;
+ 
+@@ -115,9 +117,33 @@
+     }
+   }
+ 
++  Future<void> _aggregate() async {
++    if (_aggregating || _loading || _installing.isNotEmpty) return;
++    setState(() {
++      _aggregating = true;
++      _aggregation = '正在读取规则仓库…';
++    });
++    try {
++      final result = await _controller.tryUpdateAllPlugin(
++        installMissing: true,
++        onProgress: (done, total) {
++          if (mounted) setState(() => _aggregation = '已读取 $done / $total 条新规则');
++        },
++      );
++      if (mounted) {
++        setState(() => _aggregation = '新增 ${result.updated} · 保留 ${result.notNewer}'
++            ' · 不兼容 ${result.requiresNewerClient} · 失败 ${result.failed}');
++      }
++    } catch (_) {
++      if (mounted) setState(() => _aggregation = '聚合未完成，可重试');
++    } finally {
++      if (mounted) setState(() => _aggregating = false);
++    }
++  }
++
+   Future<void> _install(
+       PluginHTTPItem item, PluginCatalogItemStatus status) async {
+-    if (!_installing.add(item.name)) return;
++    if (_aggregating || !_installing.add(item.name)) return;
+     setState(() {});
+     try {
+       await updatePluginWithFeedback(_controller, item.name,
+@@ -221,11 +247,17 @@
+           _sortButton(),
+           const Spacer(),
+         ],
++        TextButton(
++          onPressed: total == 0 || _aggregating || _loading || _installing.isNotEmpty ? null : _aggregate,
++          child: Text(_aggregating ? '聚合中…' : '一键聚合'),
++        ),
+         IconButton.filledTonal(
+             tooltip: '刷新规则列表',
+-            onPressed: _loading ? null : _refresh,
++            onPressed: _loading || _aggregating ? null : _refresh,
+             icon: const Icon(Icons.refresh_rounded)),
+       ]),
++      if (_aggregation.isNotEmpty)
++        Semantics(liveRegion: true, child: Text(_aggregation, style: theme.textTheme.bodySmall)),
+       if (_loading && total > 0)
+         const Padding(
+             padding: EdgeInsets.symmetric(vertical: 8),
+diff --git a/test/anon_rule_aggregate_test.dart b/test/anon_rule_aggregate_test.dart
+new file mode 100644
+--- /dev/null
++++ b/test/anon_rule_aggregate_test.dart
+@@ -0,0 +1,46 @@
++import 'package:flutter_test/flutter_test.dart';
++import 'package:kazumi/modules/plugin/plugin_http_module.dart';
++import 'package:kazumi/plugins/plugins.dart';
++import 'package:kazumi/plugins/plugins_controller.dart';
++
++class _Catalog extends PluginsController {
++  _Catalog({required super.catalogLoader, required super.pluginLoader,
++      required super.pluginJsonWriter})
++      : super(errorReporter: (_, _, _) {});
++  @override
++  String get ruleRepository => '';
++}
++
++void main() {
++  test('aggregate missing rules while preserving modified local rules', () async {
++    final fetched = <String>[];
++    var writes = 0;
++    final controller = _Catalog(
++      catalogLoader: (_) async => [
++        for (final name in ['EDITED', 'New', 'NEW', 'Broken', 'TooNew'])
++          PluginHTTPItem(name: name, version: '2', useNativePlayer: true, author: '', lastUpdate: 0),
++      ],
++      pluginLoader: (_, name) async {
++        fetched.add(name);
++        if (name == 'Broken') throw Exception('unavailable');
++        return Plugin.fromJson({'name': name, 'api': name == 'TooNew' ? '99999' : '1'});
++      },
++      pluginJsonWriter: (_) async { writes++; },
++    );
++    final edited = Plugin.fromJson({'name': 'edited', 'version': '1', 'userAgent': 'edited by user'});
++    controller.pluginList.add(edited);
++    final ticks = <(int, int)>[];
++    final result = await controller.tryUpdateAllPlugin(installMissing: true,
++        onProgress: (done, total) => ticks.add((done, total)));
++    expect(fetched.toSet(), {'NEW', 'Broken', 'TooNew'});
++    expect(ticks, [(0,3), (1,3), (2,3), (3,3)]);
++    expect([result.updated, result.failed, result.requiresNewerClient, result.notNewer], [1,1,1,1]);
++    expect(writes, 1);
++    expect(controller.pluginList.first, same(edited));
++
++    final retry = await controller.tryUpdateAllPlugin(installMissing: true);
++    expect(retry.notNewer, 2);
++    expect(retry.updated, 0);
++    expect(writes, 1);
++  });
++}
+diff --git a/lib/services/storage/storage.dart b/lib/services/storage/storage.dart
+--- a/lib/services/storage/storage.dart
++++ b/lib/services/storage/storage.dart
+@@ -341,6 +341,10 @@
+     return defaultValue;
+   }
+ 
++  static Future<void> putSettingIfAbsent<T>(SettingKey<T> key, T value) async {
++    if (!_setting.containsKey(key.name)) await _setting.put(key.name, value);
++  }
++
+   static Future<void> putSetting<T>(SettingKey<T> key, T value) async {
+     await _setting.put(key.name, value);
+   }

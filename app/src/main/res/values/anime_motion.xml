@@ -1,0 +1,17 @@
+<resources>
+    <style name="AnimePlaybackTheme" parent="PlayerTheme">
+        <item name="android:windowAnimationStyle">@style/AnimePlaybackWindowMotion</item>
+    </style>
+
+    <style name="AnimePlaybackWindowMotion" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/anime_playback_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/anime_playback_hold</item>
+        <item name="android:activityCloseEnterAnimation">@anim/anime_playback_hold</item>
+        <item name="android:activityCloseExitAnimation">@anim/anime_playback_exit</item>
+    </style>
+
+    <style name="AnimePlaybackSidePanelMotion" parent="">
+        <item name="android:windowEnterAnimation">@anim/anime_playback_enter</item>
+        <item name="android:windowExitAnimation">@anim/anime_playback_exit</item>
+    </style>
+</resources>

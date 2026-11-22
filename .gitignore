@@ -1,0 +1,22 @@
+.gradle/
+.kotlin/
+.idea/
+build/
+/dist/
+/reference-apps/
+/源库全量检查/
+/*.apk
+/shengjian-reader-workbench.jar
+/ANON TOOL-界面概念图.png
+/ANON TOOL-界面手工稿.png
+__pycache__/
+*.pyc
+local.properties
+*.iml
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.key

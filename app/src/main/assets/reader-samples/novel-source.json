@@ -1,0 +1,25 @@
+{
+  "bookSourceName": "声笺试读 · 小说",
+  "bookSourceUrl": "https://reader-demo.shengjian.invalid/novels/",
+  "bookSourceType": 0,
+  "enabled": true,
+  "exploreUrl": "离线试读::index.html",
+  "ruleExplore": {
+    "bookList": "@css:article",
+    "name": "@css:h2@text",
+    "author": "@css:.author@text",
+    "intro": "@css:.intro@text",
+    "bookUrl": "@css:a@href"
+  },
+  "ruleBookInfo": {
+    "tocUrl": "@css:#toc@href"
+  },
+  "ruleToc": {
+    "chapterList": "@css:ol a",
+    "chapterName": "text",
+    "chapterUrl": "href"
+  },
+  "ruleContent": {
+    "content": "@css:main"
+  }
+}

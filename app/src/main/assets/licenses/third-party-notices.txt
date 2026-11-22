@@ -1,0 +1,42 @@
+anon toolkyo · 第三方组件
+
+Kazumi 2.4.5 · 动画播放、弹幕、规则及 Bangumi 等功能组件
+Predidit 和 Kazumi 项目贡献者。GNU GPL v3 许可全文见 kazumi-GPL-3.0.txt。
+上游版本：https://github.com/Predidit/Kazumi/tree/dedb7136318a509d7f412794b2531cf725034f00
+本工程的构建脚本和对该版本的修改位于 integration/kazumi/。
+
+jsoup 1.21.2
+Copyright © 2009–2025 Jonathan Hedley
+许可：MIT。许可证原文见本目录 jsoup-license.txt 和 APK 的 META-INF/jsoup/LICENSE。
+源码：https://github.com/jhy/jsoup/tree/jsoup-1.21.2
+
+Android Java 核心库兼容组件（NIO）2.1.5
+Maven 坐标：com.android.tools:desugar_jdk_libs_nio:2.1.5
+许可：GNU GPL 第 2 版及 Classpath 例外。详见本目录 desugar-jdk-libs.txt。
+源码：https://github.com/google/desugar_jdk_libs/tree/73170c345e6a762fc6a1f0301bb15218850023ef
+
+Mozilla Rhino 1.7.15.1
+Maven 坐标：org.mozilla:rhino:1.7.15.1
+许可：主要为 Mozilla Public License 2.0。完整许可与版权声明见本目录 rhino-license.txt、rhino-notice.txt 和 APK 的 META-INF/NOTICE-tools.txt。
+源码：https://github.com/mozilla/rhino/tree/Rhino1_7_15_1_Release
+
+Anime4K v4.0
+Copyright © 2019–2021 bloc97
+许可：MIT。许可证原文随着色器保存在 assets/anime4k/LICENSE。
+源码：https://github.com/bloc97/Anime4K
+
+libmpv、media-kit Android Helper 和 JNA
+构建版本、对应源码和各组件的许可详见 mpv-notices.txt。
+
+ech_http 0.2.4
+许可为 MIT。原文和静态链接依赖的声明见 ech_http/LICENSE 和 ech_http/THIRD_PARTY_NOTICES.md。
+源码：https://github.com/ech-research/ech_http
+
+AndroidX 与 Jetpack Compose
+Apache License 2.0 见本目录 androidx-apache-2.0.txt。组件特有的声明见 APK 的 META-INF。
+源码：https://android.googlesource.com/platform/frameworks/support/
+
+Flutter 和其软件包的声明汇总见 APK 的 assets/flutter_assets/NOTICES.Z，可在应用的开源声明里离线查看。
+
+公开版图标、状态插图和离线番剧封面由本项目绘制。
+联网番剧封面由 Bangumi 提供，图片权利归各自权利方。

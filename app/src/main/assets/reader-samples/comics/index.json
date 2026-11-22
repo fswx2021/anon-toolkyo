@@ -1,0 +1,11 @@
+{
+  "books": [
+    {
+      "name": "唱针落下的夜晚",
+      "author": "声笺原创",
+      "intro": "月光、小城与一张等待播放的唱片。",
+      "cover": "night-radio.webp",
+      "url": "contents.json"
+    }
+  ]
+}
