@@ -136,6 +136,7 @@ public final class AnimePlaybackActivity extends Activity {
     private boolean demo;
     private boolean autoResume;
     private boolean privateViewing;
+    private boolean recordedWatch;
     private boolean preferMpv;
     private boolean canSwitchEngine;
     private boolean pipSupported, compactFullscreen;
@@ -208,6 +209,7 @@ public final class AnimePlaybackActivity extends Activity {
         nextOnEnd = playbackOptions.getBoolean("autoplay_next", true);
         autoResume = playbackOptions.getBoolean("auto_resume", true);
         privateViewing = playbackOptions.getBoolean("private_viewing", false);
+        recordedWatch = saved != null && saved.getBoolean("recorded_watch");
         preferMpv = playbackOptions.getBoolean("prefer_mpv", false);
         anime4k = Math.max(0, Math.min(2, playbackOptions.getInt("anime4k", 0)));
         skipSeconds = Math.max(5, Math.min(60, playbackOptions.getInt("skip_seconds", 10)));
@@ -230,6 +232,7 @@ public final class AnimePlaybackActivity extends Activity {
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putInt(EXTRA_INDEX, index);
         out.putInt(EXTRA_ROAD, roadIndex);
+        out.putBoolean("recorded_watch", recordedWatch);
         persist();
         super.onSaveInstanceState(out);
     }
@@ -674,7 +677,10 @@ public final class AnimePlaybackActivity extends Activity {
         shouldPlay = true;
         finished = false;
         persist();
-        if (!privateViewing) new AnimeLibrary(this).record(episode());
+        if (!privateViewing) {
+            new AnimeLibrary(this).record(episode(), !recordedWatch);
+            recordedWatch = true;
+        }
         refreshPlayerTitle();
         episodePanel.bind(episodes, index, false);
         commentsPanel.bind(episode());

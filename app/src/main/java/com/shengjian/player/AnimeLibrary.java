@@ -38,15 +38,18 @@ final class AnimeLibrary {
     static final class Item {
         final String title, url, cover, sourceId, sourceName, sourceValue, episode;
         final long bangumiId;
+        final long watchCount, lastWatchedAt;
+        final boolean earlierWatchCountUnknown;
         private final WatchStatus status;
 
         Item(AnimeEngine.Show show, String episode) {
             this(show.title, show.url, show.cover, show.source.id, show.source.name, show.sourceValue, episode,
-                    show.bangumiId, null);
+                    show.bangumiId, null, 0, 0, false);
         }
 
         private Item(String title, String url, String cover, String sourceId, String sourceName, String sourceValue,
-                     String episode, long bangumiId, WatchStatus status) {
+                     String episode, long bangumiId, WatchStatus status,
+                     long watchCount, long lastWatchedAt, boolean earlierWatchCountUnknown) {
             this.title = title;
             this.url = url;
             this.cover = cover;
@@ -56,12 +59,17 @@ final class AnimeLibrary {
             this.episode = episode;
             this.bangumiId = bangumiId;
             this.status = status;
+            this.watchCount = watchCount;
+            this.lastWatchedAt = lastWatchedAt;
+            this.earlierWatchCountUnknown = earlierWatchCountUnknown;
         }
 
         Item(JSONObject data) {
             this(data.optString("title"), data.optString("url"), data.optString("cover"), data.optString("source"),
                     data.optString("site"), data.optString("value"), data.optString("episode"),
-                    Math.max(0, data.optLong("bangumi")), WatchStatus.parse(data.optString("status")));
+                    Math.max(0, data.optLong("bangumi")), WatchStatus.parse(data.optString("status")),
+                    Math.max(0, data.optLong("watchCount")), Math.max(0, data.optLong("lastWatchedAt")),
+                    data.optBoolean("earlierWatchCountUnknown", !data.has("watchCount")));
         }
 
         JSONObject json() throws JSONException {
@@ -69,6 +77,10 @@ final class AnimeLibrary {
                     .put("source", sourceId).put("site", sourceName).put("value", sourceValue).put("episode", episode);
             if (bangumiId > 0) data.put("bangumi", bangumiId);
             if (status != null) data.put("status", status.key);
+            if (lastWatchedAt > 0) {
+                data.put("watchCount", watchCount).put("lastWatchedAt", lastWatchedAt)
+                        .put("earlierWatchCountUnknown", earlierWatchCountUnknown);
+            }
             return data;
         }
 
@@ -77,7 +89,15 @@ final class AnimeLibrary {
         }
 
         Item withStatus(WatchStatus value, long knownBangumiId) {
-            return new Item(title, url, cover, sourceId, sourceName, sourceValue, "", knownBangumiId, value);
+            return new Item(title, url, cover, sourceId, sourceName, sourceValue, "", knownBangumiId, value,
+                    0, 0, false);
+        }
+
+        Item watched(Item previous, boolean firstInVisit, long now) {
+            long count = previous == null ? 0 : previous.watchCount;
+            if (firstInVisit && count < Long.MAX_VALUE) count++;
+            return new Item(title, url, cover, sourceId, sourceName, sourceValue, episode, bangumiId, null,
+                    count, now, previous != null && previous.earlierWatchCountUnknown);
         }
 
         boolean same(Item other) {
@@ -119,7 +139,11 @@ final class AnimeLibrary {
         update(FAVORITES, item.withStatus(status, knownBangumiId), status != null);
     }
 
-    void record(AnimeEngine.Episode episode) { update(HISTORY, new Item(episode.show, episode.title), true); }
+    void record(AnimeEngine.Episode episode, boolean firstInVisit) {
+        Item item = new Item(episode.show, episode.title);
+        Item previous = list(HISTORY).stream().filter(item::same).findFirst().orElse(null);
+        update(HISTORY, item.watched(previous, firstInVisit, System.currentTimeMillis()), true);
+    }
 
     void remove(String group, Item item) { update(group, item, false); }
 

@@ -607,7 +607,8 @@ final class AnimeSection {
         List<Row> cells = new ArrayList<>();
         for (AnimeEngine.Show item : matches) {
             AnimeEngine.Show selected = withCalendarEntry(item, search.calendarEntry);
-            cells.add(new Row(item.title, item.source.name, item.cover, () -> openEpisodes(selected, Screen.SEARCH), null));
+            cells.add(new Row(item.title, item.source.name, item.cover, selected.bangumiId,
+                    () -> openEpisodes(selected, Screen.SEARCH), null));
         }
         searchList.submit(cells);
     }
@@ -818,7 +819,7 @@ final class AnimeSection {
         LinearLayout hero = row();
         hero.setGravity(Gravity.TOP);
         ImageView cover = artwork(dp(96), dp(148));
-        connectArtwork(cover, entry.cover());
+        artwork.bind(cover, entry.cover(), subject.id);
         hero.addView(cover);
         LinearLayout titles = column();
         titles.setPadding(dp(12), 0, 0, 0);
@@ -893,7 +894,7 @@ final class AnimeSection {
             AnimeSchedule.Entry subject = entry.subject();
             String info = entry.rank() > 0 ? "第 " + entry.rank() + " 名" : "";
             if (entry.score() > 0) info += (info.isEmpty() ? "" : " · ") + String.format(Locale.ROOT, "%.1f 分", entry.score());
-            rows.add(new Row(subject.title, info, entry.cover(), () -> {
+            rows.add(new Row(subject.title, info, entry.cover(), subject.id, () -> {
                 if (legacyMode) searchTitle(subject.title, subject);
                 else openSubject(entry);
             }, null));
@@ -975,6 +976,8 @@ final class AnimeSection {
         String info = item.episode.isEmpty() ? item.sourceName : item.episode + " · " + item.sourceName;
         boolean tracking = origin == Screen.TRACKING;
         if (tracking) info = item.trackingStatus().label + " · " + info;
+        else if (origin == Screen.HISTORY) info = info + "\n" + HistoryDisplay.summary(host, "观看",
+                item.watchCount, item.lastWatchedAt, item.earlierWatchCountUnknown);
         Runnable manage = tracking ? () -> chooseTrackingStatus(item, () -> showCollection(origin))
                 : () -> dialog(new AlertDialog.Builder(host).setTitle("移除「" + item.title + "」？")
                         .setNegativeButton("取消", null).setPositiveButton("移除记录", (window, which) -> {
@@ -982,7 +985,7 @@ final class AnimeSection {
                             if (screen == Screen.HOME) showHome();
                             else showCollection(origin);
                         }));
-        return new Row(item.title, info, item.cover, () -> {
+        return new Row(item.title, info, item.cover, item.bangumiId, () -> {
             AnimeSource source = sources.find(item.sourceId);
             if (source == null) {
                 dialog(new AlertDialog.Builder(host).setTitle("原动画源已移除")
@@ -1043,7 +1046,7 @@ final class AnimeSection {
         LinearLayout hero = row();
         hero.setPadding(0, dp(6), 0, dp(6));
         ImageView cover = artwork(dp(60), dp(80));
-        connectArtwork(cover, show.cover);
+        artwork.bind(cover, show.cover, show.bangumiId);
         hero.addView(cover);
         LinearLayout info = column();
         info.setPadding(dp(12), 0, 0, 0);
@@ -1090,7 +1093,7 @@ final class AnimeSection {
             AnimeEngine.Episode episode = episodes.get(i);
             int index = i;
             long position = AnimePlaybackActivity.savedPosition(host, episode);
-            rows.add(new Row(episode.title, position > 0 ? "继续 · " + time(position) : "播放", "",
+            rows.add(new Row(episode.title, position > 0 ? "继续 · " + time(position) : "播放", "", 0,
                     () -> launch(selectedRoad, index), null));
         }
         addList(rows);
@@ -1123,7 +1126,6 @@ final class AnimeSection {
         host.pauseMusicForAnime();
         try {
             AnimePlaybackActivity.launch(host, roads, selectedRoad, selected);
-            library.record(episodes.get(selected));
         } catch (ActivityNotFoundException missing) { toast("无法启动动画播放器"); }
     }
 
@@ -1496,12 +1498,14 @@ final class AnimeSection {
 
     private static final class Row {
         final String title, subtitle, cover;
+        final long subjectId;
         final Runnable open, more;
 
-        Row(String title, String subtitle, String cover, Runnable open, Runnable more) {
+        Row(String title, String subtitle, String cover, long subjectId, Runnable open, Runnable more) {
             this.title = title;
             this.subtitle = subtitle;
             this.cover = cover;
+            this.subjectId = subjectId;
             this.open = open;
             this.more = more;
         }
@@ -1569,7 +1573,7 @@ final class AnimeSection {
 
         void bind(AnimeDiscovery.Entry entry) {
             title.setText(entry.subject().title);
-            connectArtwork(cover, entry.cover());
+            artwork.bind(cover, entry.cover(), entry.subject().id);
             setOnClickListener(view -> openSubject(entry));
         }
     }
@@ -1606,11 +1610,13 @@ final class AnimeSection {
 
         void bind(Row row) {
             title.setText(row.title);
+            subtitle.setMaxLines(row.subtitle.contains("\n") ? 3 : 1);
             subtitle.setText(row.subtitle);
-            image.setVisibility(row.cover.isEmpty() ? View.GONE : View.VISIBLE);
-            words.setPadding(row.cover.isEmpty() ? 0 : dp(11), 0, dp(5), 0);
-            connectArtwork(image, row.cover);
-            setMinimumHeight(dp(row.cover.isEmpty() ? 53 : 70));
+            boolean hasCover = !row.cover.isEmpty() || row.subjectId > 0;
+            image.setVisibility(hasCover ? View.VISIBLE : View.GONE);
+            words.setPadding(hasCover ? dp(11) : 0, 0, dp(5), 0);
+            artwork.bind(image, row.cover, row.subjectId);
+            setMinimumHeight(dp(hasCover ? 70 : 53));
             setOnClickListener(view -> row.open.run());
             more.setVisibility(row.more == null ? View.GONE : View.VISIBLE);
             more.setOnClickListener(row.more == null ? null : view -> row.more.run());
@@ -1638,8 +1644,6 @@ final class AnimeSection {
         view.setClipToOutline(true);
         view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
     }
-
-    private void connectArtwork(ImageView image, String url) { artwork.bind(image, url); }
 
     private AlertDialog dialog(AlertDialog.Builder builder) {
         AlertDialog window = builder.create();

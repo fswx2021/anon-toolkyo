@@ -116,11 +116,12 @@ public final class MainActivity extends ComponentActivity {
     private int section = MUSIC;
     private long savedAt, checkedAt;
     private String query = "", targetId = "", shownId = "", lyricId = "", lastError = "";
-    private String playlistId = "", recentSnapshot = "";
+    private String playlistId = "", recentSnapshot = "", recentStatsSnapshot = "";
+    private Map<String, MusicCollections.HistoryStats> recentStats = Collections.emptyMap();
     private FrameLayout root;
     private AnonHome chrome;
     private LinearLayout appSettingsPage;
-    private LinearLayout openSourcePage, licensePage;
+    private LinearLayout openSourcePage, acknowledgementsPage, licensePage;
     private String openLicenseAsset;
     private FrameLayout miniCard;
     private LinearLayout miniControls;
@@ -189,7 +190,7 @@ public final class MainActivity extends ComponentActivity {
         settings = getSharedPreferences("player_ui", MODE_PRIVATE);
         musicSettings = getSharedPreferences(MusicCollections.PREFS, MODE_PRIVATE);
         collections = new MusicCollections(musicSettings.getString(MusicCollections.STATE, ""));
-        recentSnapshot = musicSettings.getString(MusicCollections.RECENT, "[]");
+        readMusicHistory();
         if (state != null) {
             backupContent = state.getBoolean("backup_content");
             targetId = state.getString("target", "");
@@ -237,7 +238,12 @@ public final class MainActivity extends ComponentActivity {
             if (state.getBoolean("app_settings_open")) {
                 showAppSettings();
                 if (state.getBoolean("open_source_page")) showOpenSourceNotices();
-                OpenSourceNotices.Document license = OpenSourceNotices.findDocument(state.getString("open_license"));
+                if (state.getBoolean("acknowledgements_open")) showAcknowledgements();
+                String licenseAsset = state.getString("open_license");
+                OpenSourceNotices.Document license = acknowledgementsPage == null
+                        && OpenSourceNotices.PROJECT_LICENSE.asset().equals(licenseAsset)
+                        ? OpenSourceNotices.PROJECT_LICENSE : OpenSourceNotices.findDocument(licenseAsset);
+                if (license != null && license != OpenSourceNotices.PROJECT_LICENSE) showAcknowledgements();
                 if (license != null) showLicenseDocument(license);
             }
         }
@@ -266,6 +272,7 @@ public final class MainActivity extends ComponentActivity {
         state.putBoolean("backup_content", backupContent);
         state.putBoolean("app_settings_open", appSettingsPage != null);
         state.putBoolean("open_source_page", openSourcePage != null);
+        state.putBoolean("acknowledgements_open", acknowledgementsPage != null);
         state.putString("open_license", openLicenseAsset);
         if (pendingUpdateInstall != null) state.putString("pending_update_install", pendingUpdateInstall.getPath());
         if (installAfterPermission != null) state.putString("update_after_permission", installAfterPermission.getPath());
@@ -332,6 +339,7 @@ public final class MainActivity extends ComponentActivity {
     @SuppressWarnings("deprecation")
     @Override public void onBackPressed() {
         if (licensePage != null) closeLicenseDocument();
+        else if (acknowledgementsPage != null) closeAcknowledgements();
         else if (openSourcePage != null) closeOpenSourceNotices();
         else if (appSettingsPage != null || inPlayer) showHome();
         else if (section == MUSIC && musicOnline.onBackPressed()) return;
@@ -403,6 +411,7 @@ public final class MainActivity extends ComponentActivity {
         updatePageWidth(home, reading ? innerWidth : contentWidth);
         if (appSettingsPage != null) updatePageWidth(appSettingsPage, contentWidth);
         if (openSourcePage != null) updatePageWidth(openSourcePage, contentWidth);
+        if (acknowledgementsPage != null) updatePageWidth(acknowledgementsPage, contentWidth);
         if (licensePage != null) updatePageWidth(licensePage, contentWidth);
     }
 
@@ -549,7 +558,7 @@ public final class MainActivity extends ComponentActivity {
         if (changingHistory && search.getVisibility() == View.VISIBLE) toggleSearch(false);
         playlistId = "";
         filter = value;
-        if (value == RECENT_TRACKS) recentSnapshot = musicSettings.getString(MusicCollections.RECENT, "[]");
+        if (value == RECENT_TRACKS) readMusicHistory();
         filter();
         if (changingHistory) list.setSelection(0);
     }
@@ -558,23 +567,29 @@ public final class MainActivity extends ComponentActivity {
         new android.app.AlertDialog.Builder(this).setTitle("清空音乐历史记录？")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("清空", (dialog, which) -> {
-                    musicSettings.edit().remove(MusicCollections.RECENT).apply();
+                    MusicCollections.clearRecent(musicSettings);
                     refreshMusicHistory();
                 })
                 .show();
     }
 
     private void removeMusicHistoryItem(String id) {
-        List<String> ids = MusicCollections.readIds(musicSettings.getString(MusicCollections.RECENT, "[]"));
-        if (ids.remove(id)) musicSettings.edit().putString(MusicCollections.RECENT, MusicCollections.writeIds(ids)).apply();
+        MusicCollections.removeRecent(musicSettings, id);
         refreshMusicHistory();
     }
 
     private void refreshMusicHistory() {
+        if (readMusicHistory() && playlistId.isEmpty() && filter == RECENT_TRACKS) filter();
+    }
+
+    private boolean readMusicHistory() {
         String recent = musicSettings.getString(MusicCollections.RECENT, "[]");
-        if (recentSnapshot.equals(recent)) return;
+        String stats = musicSettings.getString(MusicCollections.RECENT_STATS, "{}");
+        if (recentSnapshot.equals(recent) && recentStatsSnapshot.equals(stats)) return false;
         recentSnapshot = recent;
-        if (playlistId.isEmpty() && filter == RECENT_TRACKS) filter();
+        recentStatsSnapshot = stats;
+        recentStats = MusicCollections.readRecentStats(stats);
+        return true;
     }
 
     private FrameLayout buildMiniPlayer() {
@@ -959,6 +974,7 @@ public final class MainActivity extends ComponentActivity {
 
     private void showHome() {
         View outgoing = inPlayer ? player : licensePage != null ? licensePage
+                : acknowledgementsPage != null ? acknowledgementsPage
                 : openSourcePage != null ? openSourcePage : appSettingsPage;
         if (outgoing != null) PageMotion.prepareExit(root, outgoing, true);
         removeAppSettings();
@@ -1445,6 +1461,7 @@ public final class MainActivity extends ComponentActivity {
         final ImageView thumb = art(6);
         final TextView name = text("", 15, FG, true);
         final TextView summary = text("", 12, MUTED, false);
+        final TextView history = text("", 12, MUTED, false);
         final TextView time = text("", 12, MUTED, false);
         Track track;
 
@@ -1464,6 +1481,8 @@ public final class MainActivity extends ComponentActivity {
             oneLine(summary);
             info.addView(name);
             add(info, summary, W, 3);
+            history.setMaxLines(2);
+            add(info, history, W, 3);
             item.addView(info, weight(0, W));
             oneLine(time);
             item.addView(time);
@@ -1479,6 +1498,14 @@ public final class MainActivity extends ComponentActivity {
             name.setText(track.title);
             name.setTextColor(textTone(selected ? BERRY : FG));
             summary.setText(detail(track));
+            boolean showHistory = playlistId.isEmpty() && filter == RECENT_TRACKS;
+            history.setVisibility(showHistory ? View.VISIBLE : View.GONE);
+            if (showHistory) {
+                MusicCollections.HistoryStats stats = recentStats.get(track.id);
+                history.setText(HistoryDisplay.summary(MainActivity.this, "播放",
+                        stats == null ? 0 : stats.playCount(), stats == null ? 0 : stats.lastPlayedAt(),
+                        stats != null && stats.previousCountUnknown()));
+            }
             time.setVisibility(track.durationMs > 0 ? View.VISIBLE : View.GONE);
             if (track.durationMs > 0) time.setText(stamp(track.durationMs));
         }
@@ -1798,7 +1825,28 @@ public final class MainActivity extends ComponentActivity {
     private void showOpenSourceNotices() {
         if (appSettingsPage == null || openSourcePage != null) return;
         LinearLayout content = column();
-        add(content, text("感谢开源项目的作者和贡献者。许可证可在应用内离线查看。", 14, MUTED, false), W, 14);
+        add(content, text("anon toolkyo 由 fswx2021 维护。项目代码采用 GNU GPL 第 3 版（仅限第 3 版）开源。",
+                14, MUTED, false), W, 14);
+        LinearLayout project = settingsGroup(content, "项目链接与许可");
+        addSettingsRow(project, "项目网站", text("github.com/fswx2021/anon-toolkyo", 13, MUTED, false),
+                () -> openBrowser(Uri.parse(OpenSourceNotices.PROJECT_SITE)));
+        addSettingsRow(project, "版本发布与下载", null,
+                () -> openBrowser(Uri.parse(OpenSourceNotices.PROJECT_SITE + "/releases")));
+        addSettingsRow(project, "查看项目许可证", null, () -> showLicenseDocument(OpenSourceNotices.PROJECT_LICENSE));
+        LinearLayout credits = column();
+        credits.setBackground(surface(this, SURFACE, 12, 0));
+        credits.setClipToOutline(true);
+        add(content, credits, W, 18);
+        addSettingsRow(credits, "致谢", text("第三方项目和许可证", 13, MUTED, false), this::showAcknowledgements);
+        openSourcePage = settingsPage("开源声明", content, this::closeOpenSourceNotices);
+        pushSettingsPage(appSettingsPage, openSourcePage);
+    }
+
+    private void showAcknowledgements() {
+        if (openSourcePage == null || acknowledgementsPage != null) return;
+        LinearLayout content = column();
+        add(content, text("感谢以下项目的作者和贡献者。第三方组件适用各自的许可证。",
+                14, MUTED, false), W, 14);
         for (OpenSourceNotices.Component component : OpenSourceNotices.COMPONENTS) {
             LinearLayout group = settingsGroup(content, component.name());
             addSettingsRow(group, "上游源码", text(component.credit(), 13, MUTED, false),
@@ -1809,14 +1857,11 @@ public final class MainActivity extends ComponentActivity {
         }
         LinearLayout framework = settingsGroup(content, "Flutter");
         addSettingsRow(framework, "Flutter 及其依赖的许可证", null, () -> openAnimeFeature("licenses", ""));
-        LinearLayout artwork = settingsGroup(content, "素材署名");
-        addSettingsRow(artwork, "千早爱音角色设定图", text("《元祖！BanG Dream!》官方角色页", 13, MUTED, false),
-                () -> openBrowser(Uri.parse("https://anime.bang-dream.com/bandorichan/character/mygo/?member=anon")));
-        addSettingsRow(artwork, "哔哩哔哩「Mygo表情包」", text("素材索引由 ccmuyuu/bilibili-emotes 提供", 13, MUTED, false),
-                () -> openBrowser(Uri.parse("https://github.com/ccmuyuu/bilibili-emotes")));
-        add(content, text("角色与插画的权利归各自权利方。", 13, MUTED, false), W, 12);
-        openSourcePage = settingsPage("开源声明", content, this::closeOpenSourceNotices);
-        pushSettingsPage(appSettingsPage, openSourcePage);
+        LinearLayout artwork = settingsGroup(content, "数据与图片");
+        addSettingsRow(artwork, "Bangumi 番组计划", text("联网番剧资料与封面", 13, MUTED, false),
+                () -> openBrowser(Uri.parse("https://bangumi.tv/")));
+        acknowledgementsPage = settingsPage("致谢", content, this::closeAcknowledgements);
+        pushSettingsPage(openSourcePage, acknowledgementsPage);
     }
 
     private void showLicenseDocument(OpenSourceNotices.Document document) {
@@ -1838,7 +1883,7 @@ public final class MainActivity extends ComponentActivity {
         add(content, body, W, 14);
         openLicenseAsset = document.asset();
         licensePage = settingsPage(document.title(), content, this::closeLicenseDocument);
-        pushSettingsPage(openSourcePage, licensePage);
+        pushSettingsPage(licenseParent(), licensePage);
     }
 
     private void pushSettingsPage(View parent, View page) {
@@ -1853,6 +1898,18 @@ public final class MainActivity extends ComponentActivity {
         root.removeView(licensePage);
         licensePage = null;
         openLicenseAsset = null;
+        LinearLayout parent = licenseParent();
+        parent.setVisibility(View.VISIBLE);
+        PageMotion.enter(parent, true);
+    }
+
+    private LinearLayout licenseParent() {
+        return acknowledgementsPage != null ? acknowledgementsPage : openSourcePage;
+    }
+
+    private void closeAcknowledgements() {
+        root.removeView(acknowledgementsPage);
+        acknowledgementsPage = null;
         openSourcePage.setVisibility(View.VISIBLE);
         PageMotion.enter(openSourcePage, true);
     }
@@ -1918,8 +1975,10 @@ public final class MainActivity extends ComponentActivity {
     private void removeAppSettings() {
         if (appSettingsPage == null) return;
         if (licensePage != null) root.removeView(licensePage);
+        if (acknowledgementsPage != null) root.removeView(acknowledgementsPage);
         if (openSourcePage != null) root.removeView(openSourcePage);
         licensePage = null;
+        acknowledgementsPage = null;
         openSourcePage = null;
         openLicenseAsset = null;
         root.removeView(appSettingsPage);

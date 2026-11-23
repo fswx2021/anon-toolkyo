@@ -6,6 +6,10 @@ final class OpenSourceNotices {
     record Document(String title, String asset) {}
     record Component(String name, String credit, String source, List<Document> documents) {}
 
+    static final String PROJECT_SITE = "https://github.com/fswx2021/anon-toolkyo";
+    // The project and Kazumi use the same unmodified GPL v3 text.
+    static final Document PROJECT_LICENSE = license("项目许可证 · GPL-3.0-only", "kazumi-GPL-3.0.txt");
+
     static final List<Component> COMPONENTS = List.of(
             new Component("Kazumi 2.4.5", "动画播放、弹幕与规则 · Predidit 和项目贡献者",
                     "https://github.com/Predidit/Kazumi/tree/dedb7136318a509d7f412794b2531cf725034f00",

@@ -70,7 +70,7 @@ void main() {
     tester.view.physicalSize = const Size(320, 550);
     addTearDown(tester.view.reset);
     final navigator = GlobalKey<NavigatorState>();
-    final controller = PopularController()..trendList.add(subject(1, '番剧'));
+    final controller = PopularController()..trendList.add(subject(0, '番剧'));
     await tester.pumpWidget(
       MaterialApp(navigatorKey: navigator, home: const Scaffold()),
     );
@@ -116,7 +116,7 @@ void main() {
             builder: (context) {
               final controller = DefaultTabController.of(context);
               return AnonSubjectPage(
-                item: subject(1, 'BanG Dream! It’s MyGO!!!!!'),
+                item: subject(0, 'BanG Dream! It’s MyGO!!!!!'),
                 showRating: true,
                 tabController: controller,
                 tabs: tabs,

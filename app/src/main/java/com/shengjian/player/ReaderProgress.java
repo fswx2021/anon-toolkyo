@@ -22,7 +22,10 @@ final class ReaderProgress {
     static final int TEXT_OFFSET = 1;
     static final int IMAGE_FRACTION = 2;
     private static final String SHELF_GROUPS = "__shelf_groups";
+    private static final String HIDDEN_ON_SHELF = "shelf_hidden";
     private static final String HISTORY_TIME = "history_time";
+    private static final String HISTORY_COUNT = "history_count";
+    private static final String HISTORY_COUNT_PARTIAL = "history_count_partial";
 
     static final class Position {
         final int page;
@@ -75,9 +78,12 @@ final class ReaderProgress {
         final String chapterUrl;
         final String chapterTitle;
         final boolean favorite;
+        final boolean hiddenOnShelf;
         final Position position;
         final long time;
         final long historyTime;
+        final long historyCount;
+        final boolean historyCountPartial;
         final String group;
         final String latestUrl, latestTitle;
         final int unread, newChapters;
@@ -93,9 +99,12 @@ final class ReaderProgress {
             chapterUrl = json.optString("chapter");
             chapterTitle = json.optString("chapter_title");
             favorite = json.optBoolean("favorite");
+            hiddenOnShelf = json.optBoolean(HIDDEN_ON_SHELF);
             position = new Position(json);
             time = json.optLong("time");
             historyTime = json.optLong(HISTORY_TIME, chapterUrl.isEmpty() ? 0 : time);
+            historyCount = historyTime > 0 ? Math.max(0, json.optLong(HISTORY_COUNT)) : 0;
+            historyCountPartial = historyTime > 0 && (historyCount == 0 || json.optBoolean(HISTORY_COUNT_PARTIAL));
             group = json.optString("group");
             latestUrl = json.optString("latest_url");
             latestTitle = json.optString("latest_title");
@@ -137,6 +146,12 @@ final class ReaderProgress {
     }
 
     List<Entry> shelf() {
+        List<Entry> entries = entries();
+        entries.removeIf(entry -> entry.hiddenOnShelf);
+        return entries;
+    }
+
+    List<Entry> entries() {
         List<Entry> entries = new ArrayList<>();
         for (Map.Entry<String, ?> item : prefs.getAll().entrySet()) {
             if (SHELF_GROUPS.equals(item.getKey()) || !(item.getValue() instanceof String)) continue;
@@ -148,7 +163,7 @@ final class ReaderProgress {
     }
 
     List<Entry> history() {
-        List<Entry> entries = shelf();
+        List<Entry> entries = entries();
         entries.removeIf(entry -> entry.chapterUrl.isEmpty() || entry.historyTime <= 0);
         entries.sort(Comparator.comparingLong((Entry entry) -> entry.historyTime).reversed());
         return entries;
@@ -171,6 +186,8 @@ final class ReaderProgress {
         JSONObject row = object(prefs.getString(identity, ""));
         if (row.optString("chapter").isEmpty()) return;
         put(row, HISTORY_TIME, 0);
+        row.remove(HISTORY_COUNT);
+        row.remove(HISTORY_COUNT_PARTIAL);
         edit.putString(identity, row.toString());
     }
 
@@ -179,6 +196,19 @@ final class ReaderProgress {
         save(book, old == null ? "" : old.chapterUrl, old == null ? "" : old.chapterTitle,
                 old == null ? new Position(0, 0, PIXELS) : old.position, favorite,
                 old == null ? System.currentTimeMillis() : old.time);
+    }
+
+    synchronized void setOnShelf(Entry entry, boolean visible) {
+        String key = key(entry.sourceId, entry.bookUrl);
+        JSONObject row = object(prefs.getString(key, ""));
+        if (!row.has("source")) return;
+        if (visible) {
+            row.remove(HIDDEN_ON_SHELF);
+        } else {
+            put(row, HIDDEN_ON_SHELF, true);
+        }
+        put(row, "favorite", visible);
+        prefs.edit().putString(key, row.toString()).apply();
     }
 
     synchronized void remove(ReaderEngine.Book book) {
@@ -196,12 +226,11 @@ final class ReaderProgress {
     }
 
     synchronized void mark(ReaderEngine.Chapter chapter, Position position, List<ReaderEngine.Chapter> catalogue,
-                           int index, boolean opened) {
+                           int index, boolean newVisit) {
         Entry old = get(chapter.book);
-        if (opened || old == null || !chapter.url.equals(old.chapterUrl) || !position.samePlace(old.position)) {
-            boolean visible = opened || old == null || old.chapterUrl.isEmpty() || old.historyTime > 0;
+        if (newVisit || old == null || !chapter.url.equals(old.chapterUrl) || !position.samePlace(old.position)) {
             save(chapter.book, chapter.url, chapter.title, position,
-                    old != null && old.favorite, System.currentTimeMillis(), null, visible);
+                    old != null && old.favorite, System.currentTimeMillis(), null, newVisit);
         }
         if (old == null || old.latestUrl.isEmpty()) return;
         boolean latest = chapter.url.equals(old.latestUrl);
@@ -226,15 +255,18 @@ final class ReaderProgress {
     }
 
     private void save(ReaderEngine.Book book, String chapterUrl, String chapterTitle,
-                      Position position, boolean favorite, long time, String group, boolean updateHistory) {
+                      Position position, boolean favorite, long time, String group, boolean newVisit) {
         String key = key(book);
         JSONObject json = object(prefs.getString(key, ""));
         if (group != null) put(json, "group", group);
-        if (chapterUrl.isEmpty() && !favorite && json.optString("group").isEmpty()) {
+        if (favorite) json.remove(HIDDEN_ON_SHELF);
+        if (chapterUrl.isEmpty() && !favorite && json.optString("group").isEmpty()
+                && !json.optBoolean(HIDDEN_ON_SHELF)) {
             prefs.edit().remove(key).apply();
             return;
         }
         try {
+            if (!chapterUrl.isEmpty()) updateHistory(json, time, newVisit);
             json.put("source", book.source.id);
             json.put("book", book.url);
             json.put("title", book.title);
@@ -247,10 +279,26 @@ final class ReaderProgress {
             json.put("favorite", favorite);
             position.write(json);
             json.put("time", time);
-            if (updateHistory) json.put(HISTORY_TIME, time);
             prefs.edit().putString(key, json.toString()).apply();
         } catch (JSONException exception) {
             throw new IllegalStateException("Invalid reader progress", exception);
+        }
+    }
+
+    private static void updateHistory(JSONObject row, long time, boolean newVisit) throws JSONException {
+        boolean priorChapter = !row.optString("chapter").isEmpty();
+        long last = row.optLong(HISTORY_TIME, priorChapter ? row.optLong("time") : 0);
+        if (newVisit) {
+            long count = last > 0 ? Math.max(0, row.optLong(HISTORY_COUNT)) : 0;
+            boolean partial = last > 0 && (count == 0 || row.optBoolean(HISTORY_COUNT_PARTIAL));
+            // A legacy visible entry proves at least one prior reading, but never an exact count.
+            if (partial && count == 0) count = 1;
+            row.put(HISTORY_COUNT, count < Long.MAX_VALUE ? count + 1 : count);
+            row.put(HISTORY_COUNT_PARTIAL, partial);
+            row.put(HISTORY_TIME, time);
+        } else if (!row.has(HISTORY_TIME)) {
+            // Keep a legacy timestamp fixed when position, favorites or grouping changes.
+            row.put(HISTORY_TIME, priorChapter ? last : time);
         }
     }
 
@@ -285,7 +333,7 @@ final class ReaderProgress {
         Map<String, String> names = groups();
         if (names.remove(id) == null) return;
         SharedPreferences.Editor edit = prefs.edit().putString(SHELF_GROUPS, new JSONObject(names).toString());
-        for (Entry book : shelf()) {
+        for (Entry book : entries()) {
             if (book.group.equals(id)) writeMembership(edit, key(book.sourceId, book.bookUrl), "");
         }
         edit.apply();

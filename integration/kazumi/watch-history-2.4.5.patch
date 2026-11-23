@@ -1,0 +1,486 @@
+diff --git a/lib/modules/history/history_module.dart b/lib/modules/history/history_module.dart
+--- a/lib/modules/history/history_module.dart
++++ b/lib/modules/history/history_module.dart
+@@ -78,6 +78,11 @@
+   }
+ }
+ 
++/// One video page visit shared by player widgets recreated during episode changes.
++class PlaybackHistorySession {
++  bool recorded = false;
++}
++
+ @HiveType(typeId: 1)
+ class History {
+   @HiveField(0)
+@@ -107,7 +112,20 @@
+   @HiveField(8, defaultValue: '')
+   String episodePageUrl;
+ 
++  @HiveField(9)
++  Map<String, int> watchCounts;
++
++  int get watchCount => watchCounts.values.fold(0, (total, count) => total + count);
++
+   String get key => scopedKey(adapterName, bangumiItem, entryKind);
++
++  void mergeWatchCounts(Map<String, int> counts) {
++    for (final entry in counts.entries) {
++      if (entry.value > (watchCounts[entry.key] ?? 0)) {
++        watchCounts[entry.key] = entry.value;
++      }
++    }
++  }
+ 
+   History(
+     this.bangumiItem,
+@@ -118,7 +136,8 @@
+     this.lastWatchEpisodeName, {
+     this.entryKind = HistoryEntryKind.online,
+     this.episodePageUrl = '',
+-  });
++    Map<String, int> watchCounts = const {},
++  }) : watchCounts = Map.of(watchCounts);
+ 
+   static String legacyKey(String n, BangumiItem s) => n + s.id.toString();
+ 
+diff --git a/lib/modules/history/history_module.g.dart b/lib/modules/history/history_module.g.dart
+--- a/lib/modules/history/history_module.g.dart
++++ b/lib/modules/history/history_module.g.dart
+@@ -25,13 +25,14 @@
+       fields[6] == null ? '' : fields[6] as String,
+       entryKind: fields[7] == null ? 'online' : fields[7] as String,
+       episodePageUrl: fields[8] == null ? '' : fields[8] as String,
++      watchCounts: (fields[9] as Map?)?.cast<String, int>() ?? const {},
+     )..progresses = (fields[0] as Map).cast<int, Progress>();
+   }
+ 
+   @override
+   void write(BinaryWriter writer, History obj) {
+     writer
+-      ..writeByte(9)
++      ..writeByte(10)
+       ..writeByte(0)
+       ..write(obj.progresses)
+       ..writeByte(1)
+@@ -49,7 +50,9 @@
+       ..writeByte(7)
+       ..write(obj.entryKind)
+       ..writeByte(8)
+-      ..write(obj.episodePageUrl);
++      ..write(obj.episodePageUrl)
++      ..writeByte(9)
++      ..write(obj.watchCounts);
+   }
+ 
+   @override
+diff --git a/lib/repositories/history_repository.dart b/lib/repositories/history_repository.dart
+--- a/lib/repositories/history_repository.dart
++++ b/lib/repositories/history_repository.dart
+@@ -52,6 +52,7 @@
+     required PlaybackHistoryIdentity identity,
+     required Duration progress,
+     Duration duration = Duration.zero,
++    PlaybackHistorySession? session,
+   });
+ 
+   /// 获取上次观看的进度
+@@ -100,18 +101,22 @@
+     HistoryProgressSyncAppender? progressSyncAppender,
+     HistoryDeleteSyncAppender? deleteSyncAppender,
+     HistoryClearSyncAppender? clearSyncAppender,
++    Future<String> Function()? watchCountDeviceReader,
+   })  : _historiesBox = historiesBox ?? GStorage.histories,
+         _privateModeReader = privateModeReader ??
+             (() => GStorage.getSetting(SettingsKeys.privateMode)),
+         _progressSyncAppender = progressSyncAppender ?? _appendProgressSync,
+         _deleteSyncAppender = deleteSyncAppender ?? _appendDeleteSync,
+-        _clearSyncAppender = clearSyncAppender ?? _appendClearSync;
++        _clearSyncAppender = clearSyncAppender ?? _appendClearSync,
++        _watchCountDeviceReader =
++            watchCountDeviceReader ?? HistorySyncService().getDeviceId;
+ 
+   final Box<History> _historiesBox;
+   final bool Function() _privateModeReader;
+   final HistoryProgressSyncAppender _progressSyncAppender;
+   final HistoryDeleteSyncAppender _deleteSyncAppender;
+   final HistoryClearSyncAppender _clearSyncAppender;
++  final Future<String> Function() _watchCountDeviceReader;
+   final HistoryStorageCoordinator _storageCoordinator =
+       HistoryStorageCoordinator();
+ 
+@@ -203,6 +208,7 @@
+     required PlaybackHistoryIdentity identity,
+     required Duration progress,
+     Duration duration = Duration.zero,
++    PlaybackHistorySession? session,
+   }) async {
+     // 距结尾过近视为已看完，归零保存
+     if (duration > Duration.zero &&
+@@ -276,8 +282,22 @@
+           prog.updatedAtMs = nowMs;
+         }
+ 
+-        // 保存到存储
+-        await _historiesBox.put(history.key, history);
++        final unrecorded = session?.recorded == false ? session : null;
++        final previousCounts = history.watchCounts;
++        if (unrecorded != null) {
++          final device = await _watchCountDeviceReader();
++          history.watchCounts = {
++            ...previousCounts,
++            device: (previousCounts[device] ?? 0) + 1,
++          };
++        }
++        try {
++          await _historiesBox.put(history.key, history);
++        } catch (_) {
++          history.watchCounts = previousCounts;
++          rethrow;
++        }
++        unrecorded?.recorded = true;
+         if (shouldMigrateLegacy && legacyKey != history.key) {
+           await _historiesBox.delete(legacyKey);
+         }
+diff --git a/lib/pages/history/history_controller.dart b/lib/pages/history/history_controller.dart
+--- a/lib/pages/history/history_controller.dart
++++ b/lib/pages/history/history_controller.dart
+@@ -25,11 +25,13 @@
+     PlaybackHistoryIdentity identity,
+     Duration progress, {
+     Duration duration = Duration.zero,
++    PlaybackHistorySession? session,
+   }) async {
+     await _historyRepository.updateHistory(
+       identity: identity,
+       progress: progress,
+       duration: duration,
++      session: session,
+     );
+     init();
+   }
+diff --git a/lib/pages/player/player_item.dart b/lib/pages/player/player_item.dart
+--- a/lib/pages/player/player_item.dart
++++ b/lib/pages/player/player_item.dart
+@@ -26,6 +26,7 @@
+ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/pages/player/video_details_sheet.dart';
+ import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
++import 'package:kazumi/modules/history/history_module.dart';
+ import 'package:kazumi/pages/history/history_controller.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+ import 'package:kazumi/modules/danmaku/danmaku_module.dart';
+@@ -44,6 +45,7 @@
+   const PlayerItem({
+     super.key,
+     required this.playerController,
++    required this.historySession,
+     required this.videoPageController,
+     required this.fillsWindow,
+     this.onToggleSidePanel,
+@@ -55,6 +57,7 @@
+   });
+ 
+   final PlayerController playerController;
++  final PlaybackHistorySession historySession;
+   final VideoPageController videoPageController;
+   final bool fillsWindow;
+   final VoidCallback? onToggleSidePanel;
+@@ -1198,6 +1201,7 @@
+           historyIdentity,
+           playerController.playback.playerPosition,
+           duration: playerController.playback.playerDuration,
++          session: widget.historySession,
+         );
+       }
+       final playingSelection = videoPageController.playbackEpisode;
+diff --git a/lib/pages/video/video_page.dart b/lib/pages/video/video_page.dart
+--- a/lib/pages/video/video_page.dart
++++ b/lib/pages/video/video_page.dart
+@@ -16,6 +16,7 @@
+ import 'package:kazumi/navigation.dart';
+ import 'package:kazumi/pages/download/download_controller.dart';
+ import 'package:kazumi/pages/download/download_episode_sheet.dart';
++import 'package:kazumi/modules/history/history_module.dart';
+ import 'package:kazumi/pages/history/history_controller.dart';
+ import 'package:kazumi/pages/player/episode_comments_sheet.dart';
+ import 'package:kazumi/pages/player/player_controller.dart';
+@@ -64,6 +65,7 @@
+   bool showDebugLog = false;
+   List<String> webviewLogLines = [];
+   StreamSubscription<String>? _logSubscription;
++  final _historySession = PlaybackHistorySession();
+   final FocusNode keyboardFocus =
+       FocusNode(debugLabel: 'Video player shortcut scope');
+ 
+@@ -473,6 +475,7 @@
+           child: playerLoading
+               ? const SizedBox.shrink()
+               : PlayerItem(
++                  historySession: _historySession,
+                   fillsWindow: layout.fillsWindow,
+                   playerController: playerController,
+                   videoPageController: videoPageController,
+diff --git a/lib/modules/history/history_sync.dart b/lib/modules/history/history_sync.dart
+--- a/lib/modules/history/history_sync.dart
++++ b/lib/modules/history/history_sync.dart
+@@ -58,6 +58,7 @@
+     this.entryKind,
+     this.episodePageUrl,
+     this.carriesWatchState = false,
++    this.watchCounts = const {},
+   });
+ 
+   final String eventId;
+@@ -76,6 +77,7 @@
+   final String? entryKind;
+   final String? episodePageUrl;
+   final bool carriesWatchState;
++  final Map<String, int> watchCounts;
+ 
+   String get version => HistorySyncVersion.of(
+         updatedAt: updatedAt,
+@@ -130,6 +132,7 @@
+       entryKind: history.entryKind,
+       episodePageUrl: history.episodePageUrl,
+       carriesWatchState: true,
++      watchCounts: Map.of(history.watchCounts),
+     );
+   }
+ 
+@@ -184,6 +187,7 @@
+       lastWatchEpisodeName: json['lastWatchEpisodeName'] as String?,
+       entryKind: json['entryKind'] as String?,
+       episodePageUrl: json['episodePageUrl'] as String?,
++      watchCounts: HistorySyncCodec.watchCountsFromJson(json['watchCounts']),
+       carriesWatchState: (json['carriesWatchState'] as bool?) ??
+           (json.containsKey('lastSrc') ||
+               json.containsKey('lastWatchEpisodeName')),
+@@ -210,6 +214,7 @@
+       if (entryKind != null) 'entryKind': entryKind,
+       if (episodePageUrl != null) 'episodePageUrl': episodePageUrl,
+       if (carriesWatchState) 'carriesWatchState': carriesWatchState,
++      if (watchCounts.isNotEmpty) 'watchCounts': watchCounts,
+     };
+   }
+ }
+@@ -514,6 +519,7 @@
+           episodePageUrl: event.episodePageUrl ?? '',
+         );
+ 
++    current.mergeWatchCounts(event.watchCounts);
+     final itemVersion = itemVersions[entityKey];
+     if (itemVersion == null ||
+         HistorySyncVersion.compare(event.version, itemVersion) >= 0) {
+@@ -680,6 +686,7 @@
+   final HistorySyncSnapshot _snapshot;
+   final Map<String, HistorySyncEvent> _progressEvents = {};
+   final Map<String, HistorySyncEvent> _watchStateEvents = {};
++  final Map<String, Map<String, HistorySyncEvent>> _watchCountEvents = {};
+   final Map<String, HistorySyncEvent> _deleteEvents = {};
+   HistorySyncEvent? _clearEvent;
+ 
+@@ -693,7 +700,15 @@
+           _keepLatest(_watchStateEvents, entityKey, event);
+         }
+       case HistorySyncOp.upsertWatchState:
+-        _keepLatest(_watchStateEvents, _upsertEntityKey(event), event);
++        final entityKey = _upsertEntityKey(event);
++        _keepLatest(_watchStateEvents, entityKey, event);
++        if (event.watchCounts.isNotEmpty) {
++          _keepLatest(
++            _watchCountEvents.putIfAbsent(entityKey, () => {}),
++            event.deviceId,
++            event,
++          );
++        }
+       case HistorySyncOp.deleteHistory:
+         _keepLatest(
+           _deleteEvents,
+@@ -725,6 +740,7 @@
+       _deleteEvents.values,
+       _watchStateEvents.values,
+       _progressEvents.values,
++      ..._watchCountEvents.values.map((events) => events.values),
+     ]) {
+       for (final event in events) {
+         uniqueEvents[event.eventId] = event;
+@@ -824,6 +840,19 @@
+     return lines.isEmpty ? '' : '$lines\n';
+   }
+ 
++  static Map<String, int> watchCountsFromJson(Object? value) {
++    if (value is! Map) return {};
++    final counts = <String, int>{};
++    for (final entry in value.entries) {
++      final device = entry.key;
++      final count = entry.value;
++      if (device is String && device.isNotEmpty && count is int && count > 0) {
++        counts[device] = count;
++      }
++    }
++    return counts;
++  }
++
+   static History historyFromJson(Map<String, dynamic> json) {
+     final history = History(
+       bangumiItemFromJson(
+@@ -836,6 +865,7 @@
+       json['lastWatchEpisodeName'] as String? ?? '',
+       entryKind: json['entryKind'] as String? ?? HistoryEntryKind.online,
+       episodePageUrl: json['episodePageUrl'] as String? ?? '',
++      watchCounts: watchCountsFromJson(json['watchCounts']),
+     );
+     history.progresses = {
+       for (final entry
+@@ -857,6 +887,7 @@
+       'lastWatchEpisodeName': history.lastWatchEpisodeName,
+       'entryKind': history.entryKind,
+       'episodePageUrl': history.episodePageUrl,
++      if (history.watchCounts.isNotEmpty) 'watchCounts': history.watchCounts,
+       'progresses': {
+         for (final entry in history.progresses.entries)
+           entry.key.toString(): progressToJson(entry.value),
+diff --git a/lib/services/sync/history_sync_service.dart b/lib/services/sync/history_sync_service.dart
+--- a/lib/services/sync/history_sync_service.dart
++++ b/lib/services/sync/history_sync_service.dart
+@@ -176,6 +176,7 @@
+           entryKind: history.entryKind,
+           episodePageUrl: history.episodePageUrl,
+           carriesWatchState: true,
++          watchCounts: Map.of(history.watchCounts),
+         ),
+       );
+     }
+diff --git a/lib/services/storage/storage.dart b/lib/services/storage/storage.dart
+--- a/lib/services/storage/storage.dart
++++ b/lib/services/storage/storage.dart
+@@ -237,9 +237,14 @@
+               HistoryEntryKind.normalize(tempHistory.entryKind);
+           final targetKey = tempHistory.key;
+           final existing = histories.get(targetKey);
+-          if (existing == null ||
+-              existing.lastWatchTime.isBefore(tempHistory.lastWatchTime)) {
++          if (existing == null) {
+             await histories.put(targetKey, tempHistory);
++          } else if (existing.lastWatchTime.isBefore(tempHistory.lastWatchTime)) {
++            tempHistory.mergeWatchCounts(existing.watchCounts);
++            await histories.put(targetKey, tempHistory);
++          } else if (tempHistory.watchCounts.isNotEmpty) {
++            existing.mergeWatchCounts(tempHistory.watchCounts);
++            await histories.put(targetKey, existing);
+           }
+         }
+       });
+diff --git a/lib/pages/history/history_page.dart b/lib/pages/history/history_page.dart
+--- a/lib/pages/history/history_page.dart
++++ b/lib/pages/history/history_page.dart
+@@ -3,6 +3,7 @@
+ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:kazumi/anon/anon_feature_frame.dart';
+ import 'package:kazumi/anon/anon_watch_stats.dart';
++import 'package:kazumi/anon/history_viewing_stats.dart';
+ import 'package:kazumi/pages/my/my_controller.dart';
+ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/modules/collect/collect_type.dart';
+@@ -95,6 +96,7 @@
+   Widget build(BuildContext context) {
+     return Observer(builder: (context) {
+       final entries = widget.controller.histories.toList();
++      final stats = HistoryViewingStats.forWorks(entries);
+       return PopScope(
+         canPop: !_editing,
+         onPopInvokedWithResult: (didPop, result) {
+@@ -123,6 +125,7 @@
+               editing: _editing,
+               itemBuilder: (history, borderRadius) => _HistoryCard(
+                 history: history,
++                stats: stats[HistoryViewingStats.workKey(history)]!,
+                 borderRadius: borderRadius,
+                 editing: _editing,
+                 busy: _clearing || _deleting.contains(history.key),
+@@ -138,6 +141,7 @@
+ class _HistoryCard extends StatefulWidget {
+   const _HistoryCard({
+     required this.history,
++    required this.stats,
+     required this.onDelete,
+     required this.editing,
+     required this.busy,
+@@ -145,6 +149,7 @@
+   });
+ 
+   final History history;
++  final HistoryViewingStats stats;
+   final bool editing;
+   final bool busy;
+   final Future<void> Function() onDelete;
+@@ -201,6 +206,7 @@
+       _collectController.collectibles.length;
+       return HistoryRecordTile(
+         history: widget.history,
++        stats: widget.stats,
+         borderRadius: widget.borderRadius,
+         editing: widget.editing,
+         busy: widget.busy,
+diff --git a/lib/pages/history/history_record_tile.dart b/lib/pages/history/history_record_tile.dart
+--- a/lib/pages/history/history_record_tile.dart
++++ b/lib/pages/history/history_record_tile.dart
+@@ -1,4 +1,5 @@
+ import 'package:flutter/material.dart';
++import 'package:kazumi/anon/history_viewing_stats.dart';
+ import 'package:kazumi/bean/card/network_img_layer.dart';
+ import 'package:kazumi/bean/widget/kazumi_menu.dart';
+ import 'package:kazumi/bean/widget/loading_indicator.dart';
+@@ -9,6 +10,7 @@
+   const HistoryRecordTile({
+     super.key,
+     required this.history,
++    required this.stats,
+     required this.onPlay,
+     required this.onDetails,
+     required this.onDelete,
+@@ -20,6 +22,7 @@
+   });
+ 
+   final History history;
++  final HistoryViewingStats stats;
+   final VoidCallback onPlay;
+   final VoidCallback onDetails;
+   final Future<void> Function() onDelete;
+@@ -54,8 +57,6 @@
+             HistoryEntryKind.offline
+         ? '缓存'
+         : '在线';
+-    final time =
+-        TimeOfDay.fromDateTime(history.lastWatchTime.toLocal()).format(context);
+     final image = history.bangumiItem.images['large'] ?? '';
+     final position = _position;
+ 
+@@ -92,7 +93,8 @@
+                   position,
+                   source,
+                   history.adapterName,
+-                  time
++                  stats.countLabel,
++                  stats.timeLabel,
+                 ].where((text) => text.isNotEmpty).join('，'),
+                 child: InkWell(onTap: editing || busy ? null : onPlay),
+               ),
+@@ -131,13 +133,15 @@
+                       [
+                         source,
+                         if (history.adapterName.isNotEmpty) history.adapterName,
+-                        time
+                       ].join(' · '),
+                       maxLines: 2,
+                       overflow: TextOverflow.ellipsis,
+                       style: theme.textTheme.bodySmall
+                           ?.copyWith(color: colors.onSurfaceVariant),
+                     ),
++                    const SizedBox(height: 4),
++                    Text(stats.countLabel, style: theme.textTheme.bodySmall),
++                    Text(stats.timeLabel, style: theme.textTheme.bodySmall),
+                   ],
+                 );
+                 final actions = _actions(context, wide: wide || largeText);

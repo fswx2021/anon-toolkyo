@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
@@ -84,6 +85,15 @@ public class FinalFeatureInteractionTest {
             settings.setAccessible(true);
             settings.invoke(host);
             clickSettingsRow(host, "开源声明");
+            View project = (View) field(MainActivity.class, "openSourcePage").get(host);
+            assertNull(label(project, "Kazumi 2.4.5"));
+            clickSettingsRow(host, "项目网站");
+            assertEquals(OpenSourceNotices.PROJECT_SITE, shadowOf(host).getNextStartedActivity().getDataString());
+            clickSettingsRow(host, "查看项目许可证");
+            View projectLicense = (View) field(MainActivity.class, "licensePage").get(host);
+            assertEquals("项目许可证 · GPL-3.0-only", projectLicense.getAccessibilityPaneTitle());
+            host.onBackPressed();
+            clickSettingsRow(host, "致谢");
             clickSettingsRow(host, "上游源码");
             Intent source = shadowOf(host).getNextStartedActivity();
             assertEquals(Intent.ACTION_VIEW, source.getAction());
@@ -104,6 +114,8 @@ public class FinalFeatureInteractionTest {
             clickSettingsRow(host, "Flutter 及其依赖的许可证");
             Intent flutter = shadowOf(host).getNextStartedActivity();
             assertEquals("licenses", flutter.getStringExtra("feature"));
+            host.onBackPressed();
+            assertEquals(View.VISIBLE, ((View) field(MainActivity.class, "openSourcePage").get(host)).getVisibility());
             host.onBackPressed();
             assertEquals(View.VISIBLE, ((View) field(MainActivity.class, "appSettingsPage").get(host)).getVisibility());
         }
@@ -221,6 +233,35 @@ public class FinalFeatureInteractionTest {
             showMetadata.setAccessible(true);
             showMetadata.invoke(host, downloaded);
             assertEquals(View.GONE, ((View) field(MainActivity.class, "downloadTrack").get(host)).getVisibility());
+        }
+    }
+
+    @Test public void musicHistoryUpdatesEvenWhenItsTrackOrderHasNotChanged() throws Exception {
+        try (var controller = Robolectric.buildActivity(MainActivity.class).create()) {
+            MainActivity host = controller.get();
+            Track track = new Track("listened", "已播放的歌", "", "", "", "file:///listened.mp3",
+                    "", "", "MP3", "", 120000, null);
+            field(MainActivity.class, "tracks").set(host, List.of(track));
+            Method index = MainActivity.class.getDeclaredMethod("indexTracks");
+            index.setAccessible(true);
+            index.invoke(host);
+            var preferences = host.getSharedPreferences(MusicCollections.PREFS, Application.MODE_PRIVATE);
+            long first = 1_700_000_000_000L;
+            long second = first + 60_000;
+            MusicCollections.recordPlayed(preferences, track.id, first);
+            Method filter = MainActivity.class.getDeclaredMethod("setMusicFilter", int.class);
+            filter.setAccessible(true);
+            filter.invoke(host, field(MainActivity.class, "RECENT_TRACKS").getInt(null));
+            BaseAdapter rows = (BaseAdapter) field(MainActivity.class, "songs").get(host);
+            ViewGroup list = (ViewGroup) field(MainActivity.class, "list").get(host);
+            View row = rows.getView(0, null, list);
+            assertNotNull(label(row, HistoryDisplay.summary(host, "播放", 1, first, false)));
+
+            MusicCollections.recordPlayed(preferences, track.id, second);
+            Method refresh = MainActivity.class.getDeclaredMethod("refreshMusicHistory");
+            refresh.setAccessible(true);
+            refresh.invoke(host);
+            assertNotNull(label(rows.getView(0, row, list), HistoryDisplay.summary(host, "播放", 2, second, false)));
         }
     }
 

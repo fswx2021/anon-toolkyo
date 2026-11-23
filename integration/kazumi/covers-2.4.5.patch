@@ -1,0 +1,260 @@
+diff --git a/lib/bean/card/network_img_layer.dart b/lib/bean/card/network_img_layer.dart
+--- a/lib/bean/card/network_img_layer.dart
++++ b/lib/bean/card/network_img_layer.dart
+@@ -2,7 +2,9 @@
+ 
+ import 'package:cached_network_image/cached_network_image.dart';
+ import 'package:flutter/material.dart';
++import 'package:kazumi/anon/subject_cover.dart';
+ import 'package:kazumi/bean/widget/loading_indicator.dart';
++import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/utils/constants.dart';
+ import 'package:kazumi/utils/image_extension.dart';
+@@ -11,6 +13,7 @@
+   const NetworkImgLayer({
+     super.key,
+     this.src,
++    this.subject,
+     required this.width,
+     required this.height,
+     this.fit = BoxFit.cover,
+@@ -25,6 +28,7 @@
+   });
+ 
+   final String? src;
++  final BangumiItem? subject;
+   final double width;
+   final double height;
+   final BoxFit fit;
+@@ -63,25 +67,39 @@
+ 
+   @override
+   Widget build(BuildContext context) {
+-    final imageUrl = src ?? '';
+-    if (imageUrl.isEmpty) {
+-      return _placeholder(context);
+-    }
++    final item = subject;
++    final sources = item == null
++        ? [if (src != null && src!.isNotEmpty) src!]
++        : subjectCoverUrls(
++            item.id,
++            item.images,
++            preferOriginal: width * MediaQuery.devicePixelRatioOf(context) > 400,
++          );
++    if (sources.isEmpty) return _placeholder(context);
+ 
+     final (memCacheWidth, memCacheHeight) = _cacheSize(context);
+-    if (RegExp(r'^assets/anon/posters/[0-9]+\.webp$').hasMatch(imageUrl)) {
+-      return ClipRRect(
+-        borderRadius: _borderRadius,
+-        child: Image.asset(imageUrl, width: width, height: height, fit: fit,
+-            cacheWidth: memCacheWidth, cacheHeight: memCacheHeight,
+-            color: color, colorBlendMode: colorBlendMode, filterQuality: filterQuality,
+-            errorBuilder: (context, error, stack) => _placeholder(context)),
+-      );
+-    }
+-    return ClipRRect(
+-      clipBehavior: Clip.antiAlias,
+-      borderRadius: _borderRadius,
+-      child: CachedNetworkImage(
++    Widget bundledImage(String imageUrl) => Image.asset(
++          imageUrl,
++          width: width,
++          height: height,
++          fit: fit,
++          cacheWidth: memCacheWidth,
++          cacheHeight: memCacheHeight,
++          color: color,
++          colorBlendMode: colorBlendMode,
++          filterQuality: filterQuality,
++          errorBuilder: (context, error, stack) => _placeholder(context),
++        );
++
++    final bundled = sources.last;
++    Widget load(int index) {
++      if (index == sources.length) return _placeholder(context);
++      final imageUrl = sources[index];
++      if (bundledSubjectCoverPattern.hasMatch(imageUrl)) {
++        return bundledImage(imageUrl);
++      }
++      return CachedNetworkImage(
++        key: ValueKey(imageUrl),
+         imageUrl: imageUrl,
+         width: width,
+         height: height,
+@@ -93,12 +111,20 @@
+         filterQuality: filterQuality,
+         color: color,
+         colorBlendMode: colorBlendMode,
+-        errorListener: (e) {
+-          KazumiLogger().w("NetworkImage: network image load error", error: e);
++        errorListener: (error) {
++          KazumiLogger().w("NetworkImage: network image load error", error: error);
+         },
+-        errorWidget: (context, url, error) => _placeholder(context),
+-        placeholder: (context, url) => _placeholder(context, loading: true),
+-      ),
++        errorWidget: (context, url, error) => load(index + 1),
++        placeholder: (context, url) => bundledSubjectCoverPattern.hasMatch(bundled)
++            ? bundledImage(bundled)
++            : _placeholder(context, loading: true),
++      );
++    }
++
++    return ClipRRect(
++      clipBehavior: Clip.antiAlias,
++      borderRadius: _borderRadius,
++      child: load(0),
+     );
+   }
+ 
+diff --git a/lib/bean/card/bangumi_card.dart b/lib/bean/card/bangumi_card.dart
+--- a/lib/bean/card/bangumi_card.dart
++++ b/lib/bean/card/bangumi_card.dart
+@@ -49,13 +49,13 @@
+                               NetworkImgLayer.heroFlightShuttleBuilder,
+                           tag: bangumiItem.id,
+                           child: NetworkImgLayer(
+-                            src: bangumiItem.images['large'] ?? '',
++                            subject: bangumiItem,
+                             width: maxWidth,
+                             height: maxHeight,
+                           ),
+                         )
+                       : NetworkImgLayer(
+-                          src: bangumiItem.images['large'] ?? '',
++                          subject: bangumiItem,
+                           width: maxWidth,
+                           height: maxHeight,
+                         );
+diff --git a/lib/bean/card/bangumi_info_card.dart b/lib/bean/card/bangumi_info_card.dart
+--- a/lib/bean/card/bangumi_info_card.dart
++++ b/lib/bean/card/bangumi_info_card.dart
+@@ -149,7 +149,7 @@
+                             NetworkImgLayer.heroFlightShuttleBuilder,
+                         tag: widget.bangumiItem.id,
+                         child: NetworkImgLayer(
+-                          src: widget.bangumiItem.images['large'] ?? '',
++                          subject: widget.bangumiItem,
+                           width: maxWidth,
+                           height: maxHeight,
+                           fadeInDuration: const Duration(milliseconds: 0),
+diff --git a/lib/pages/info/info_tabview.dart b/lib/pages/info/info_tabview.dart
+--- a/lib/pages/info/info_tabview.dart
++++ b/lib/pages/info/info_tabview.dart
+@@ -561,7 +561,7 @@
+               return Row(
+                 children: [
+                   NetworkImgLayer(
+-                    src: bangumiItem.images['large'] ?? '',
++                    subject: bangumiItem,
+                     width: imageWidth,
+                     height: imageHeight,
+                     origAspectRatio: posterAspectRatio,
+diff --git a/lib/pages/info/info_controller.dart b/lib/pages/info/info_controller.dart
+--- a/lib/pages/info/info_controller.dart
++++ b/lib/pages/info/info_controller.dart
+@@ -128,7 +128,7 @@
+       bangumiItem = value;
+     } else {
+       if (value.images.values.any((url) => url.startsWith('https://'))) {
+-        bangumiItem.images = value.images;
++        bangumiItem.images = {...bangumiItem.images, ...value.images};
+       }
+       bangumiItem.summary = value.summary;
+       bangumiItem.tags = value.tags;
+diff --git a/lib/pages/popular/popular_page.dart b/lib/pages/popular/popular_page.dart
+--- a/lib/pages/popular/popular_page.dart
++++ b/lib/pages/popular/popular_page.dart
+@@ -3,6 +3,7 @@
+ import 'package:flutter/services.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
++import 'package:kazumi/anon/subject_cover.dart';
+ import 'package:kazumi/bean/widget/bangumi_mirror_error_widget.dart';
+ import 'package:kazumi/bean/widget/kazumi_menu.dart';
+ import 'package:kazumi/modules/bangumi/bangumi_item.dart';
+@@ -43,7 +44,7 @@
+           BangumiItem.fromJson({
+             ...row,
+             'rating': <String, dynamic>{},
+-            'images': {'large': 'assets/anon/posters/${row["id"]}.webp'},
++            'images': withBundledSubjectCover(row['id'] as int, const {}),
+           }),
+       ];
+       if (!mounted) return;
+diff --git a/lib/bean/card/bangumi_timeline_card.dart b/lib/bean/card/bangumi_timeline_card.dart
+--- a/lib/bean/card/bangumi_timeline_card.dart
++++ b/lib/bean/card/bangumi_timeline_card.dart
+@@ -165,8 +165,6 @@
+   }
+ 
+   Widget _buildCover(BuildContext context) {
+-    final colors = Theme.of(context).colorScheme;
+-    final imageUrl = bangumiItem.images['large'] ?? '';
+     return ExcludeSemantics(
+       child: SizedBox(
+         width: compact ? 80 : 88,
+@@ -177,19 +175,11 @@
+             child: ClipRRect(
+               borderRadius: const BorderRadius.all(
+                   Radius.circular(_cornerRadius - _contentPadding)),
+-              child: imageUrl.isEmpty
+-                  ? ColoredBox(
+-                      color: colors.surfaceContainerHighest,
+-                      child: Center(
+-                        child: Icon(Icons.movie_outlined,
+-                            color: colors.onSurfaceVariant),
+-                      ),
+-                    )
+-                  : NetworkImgLayer(
+-                      src: imageUrl,
+-                      width: constraints.maxWidth,
+-                      height: constraints.maxHeight,
+-                    ),
++              child: NetworkImgLayer(
++                subject: bangumiItem,
++                width: constraints.maxWidth,
++                height: constraints.maxHeight,
++              ),
+             ),
+           ),
+         ),
+diff --git a/lib/pages/history/history_record_tile.dart b/lib/pages/history/history_record_tile.dart
+--- a/lib/pages/history/history_record_tile.dart
++++ b/lib/pages/history/history_record_tile.dart
+@@ -57,7 +57,6 @@
+             HistoryEntryKind.offline
+         ? '缓存'
+         : '在线';
+-    final image = history.bangumiItem.images['large'] ?? '';
+     final position = _position;
+ 
+     return Dismissible(
+@@ -156,19 +155,11 @@
+                           child: IgnorePointer(
+                             child: ClipRRect(
+                               borderRadius: BorderRadius.circular(8),
+-                              child: image.isEmpty
+-                                  ? Container(
+-                                      width: coverWidth,
+-                                      height: coverWidth * 1.4,
+-                                      color: colors.surfaceContainerHighest,
+-                                      child: Icon(Icons.movie_outlined,
+-                                          color: colors.onSurfaceVariant),
+-                                    )
+-                                  : NetworkImgLayer(
+-                                      src: image,
+-                                      width: coverWidth,
+-                                      height: coverWidth * 1.4,
+-                                    ),
++                              child: NetworkImgLayer(
++                                subject: history.bangumiItem,
++                                width: coverWidth,
++                                height: coverWidth * 1.4,
++                              ),
+                             ),
+                           ),
+                         ),

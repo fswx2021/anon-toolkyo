@@ -126,9 +126,6 @@ class _SubjectMasthead extends StatelessWidget {
       if (item.airDate.trim().isNotEmpty) item.airDate,
       ...item.metaTags.where((tag) => tag.trim().isNotEmpty).take(2),
     ].join(' · ');
-    final cover = ['large', 'common', 'medium', 'small', 'grid']
-        .map((size) => item.images[size]?.trim() ?? '')
-        .firstWhere((url) => url.isNotEmpty, orElse: () => '');
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 840),
@@ -141,7 +138,7 @@ class _SubjectMasthead extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   NetworkImgLayer(
-                    src: cover,
+                    subject: item,
                     width: 90,
                     height: 128,
                     borderRadius: BorderRadius.circular(8),

@@ -38,6 +38,7 @@ final class AnimeCoverCache implements AutoCloseable {
     private static final int REQUEST_TIMEOUT_MILLIS = 4_000;
     private static final int MAX_IMAGES = 160;
     private static final long DISK_BUDGET = 40L * 1024 * 1024;
+    private static final long SUBJECT_COVER_MAX_AGE = 24L * 60 * 60 * 1_000;
     private static final int MAX_PENDING = 48;
     private static final Pattern CDN_COVER = Pattern.compile("/(?:r/[1-9][0-9]{0,3}/)?pic/cover/[a-z]/[0-9A-Za-z_./-]+");
     private static final Pattern API_COVER = Pattern.compile("/v0/subjects/[1-9][0-9]{0,11}/image");
@@ -52,73 +53,82 @@ final class AnimeCoverCache implements AutoCloseable {
     private final AssetManager assets;
     private final Handler main;
     private final ExecutorService worker = Executors.newFixedThreadPool(4);
-    private final Map<String, List<WeakReference<ImageView>>> pending = new HashMap<>();
-    private final LruCache<String, Long> retryAfter = new LruCache<>(64);
-    private final LruCache<String, Bitmap> placeholders = new LruCache<>(6);
-    private final LruCache<String, Bitmap> memory = new LruCache<>(8 * 1024 * 1024) {
-        @Override protected int sizeOf(String key, Bitmap image) { return image.getAllocationByteCount(); }
+    private final Map<CoverRequest, List<WeakReference<ImageView>>> pending = new HashMap<>();
+    private final LruCache<CoverRequest, Long> retryAfter = new LruCache<>(64);
+    private final LruCache<CoverRequest, Bitmap> placeholders = new LruCache<>(6);
+    private final LruCache<CoverRequest, Bitmap> memory = new LruCache<>(8 * 1024 * 1024) {
+        @Override protected int sizeOf(CoverRequest key, Bitmap image) { return image.getAllocationByteCount(); }
     };
     private boolean closed;
 
+    record CoverRequest(URI image, long subjectId) {
+        boolean mutable() { return subjectId > 0 || isSubjectCover(image); }
+    }
+
     AnimeCoverCache(Context context, Handler main) {
-        directory = new File(context.getCacheDir(), "anime-artwork-v2");
+        directory = new File(context.getCacheDir(), "anime-artwork-v3");
         assets = context.getAssets();
         this.main = main;
     }
 
     void bind(ImageView image, String url) {
+        bind(image, url, 0);
+    }
+
+    void bind(ImageView image, String url, long subjectId) {
         image.animate().cancel();
         image.setAlpha(1f);
-        image.setTag(url);
+        CoverRequest request = coverRequest(url, subjectId);
+        image.setTag(request);
         image.setScaleType(ImageView.ScaleType.CENTER);
         image.setImageResource(android.R.drawable.ic_menu_gallery);
-        if (closed || !url.startsWith("https://")) return;
-        Bitmap cached = memory.get(url);
+        if (closed || request == null) return;
+        Bitmap cached = memory.get(request);
         if (cached != null) {
             show(image, cached, false);
             return;
         }
-        Bitmap placeholder = placeholders.get(url);
+        Bitmap placeholder = placeholders.get(request);
         if (placeholder != null) show(image, placeholder, false);
-        List<WeakReference<ImageView>> existing = pending.get(url);
+        List<WeakReference<ImageView>> existing = pending.get(request);
         if (existing != null) {
             existing.removeIf(target -> target.get() == null || target.get() == image);
             if (existing.size() < 16) existing.add(new WeakReference<>(image));
             return;
         }
-        Long next = retryAfter.get(url);
+        Long next = retryAfter.get(request);
         if (pending.size() >= MAX_PENDING || next != null && next > SystemClock.elapsedRealtime()) return;
-        pending.put(url, new ArrayList<>(List.of(new WeakReference<>(image))));
+        pending.put(request, new ArrayList<>(List.of(new WeakReference<>(image))));
         worker.execute(() -> {
-            Bitmap loaded = load(url);
-            main.post(() -> deliver(url, loaded));
+            Bitmap loaded = load(request);
+            main.post(() -> deliver(request, loaded));
         });
     }
 
-    private void deliver(String url, Bitmap bitmap) {
-        List<WeakReference<ImageView>> targets = pending.remove(url);
+    private void deliver(CoverRequest request, Bitmap bitmap) {
+        List<WeakReference<ImageView>> targets = pending.remove(request);
         if (closed || targets == null) return;
         if (bitmap == null) {
-            retryAfter.put(url, SystemClock.elapsedRealtime() + 10_000L);
+            retryAfter.put(request, SystemClock.elapsedRealtime() + 10_000L);
             return;
         }
-        retryAfter.remove(url);
-        memory.put(url, bitmap);
-        updateTargets(url, targets, bitmap, true);
+        retryAfter.remove(request);
+        memory.put(request, bitmap);
+        updateTargets(request, targets, bitmap, true);
     }
 
-    private void preview(String url, Bitmap bitmap) {
-        List<WeakReference<ImageView>> targets = pending.get(url);
+    private void preview(CoverRequest request, Bitmap bitmap) {
+        List<WeakReference<ImageView>> targets = pending.get(request);
         if (closed || targets == null) return;
-        placeholders.put(url, bitmap);
-        updateTargets(url, targets, bitmap, false);
+        placeholders.put(request, bitmap);
+        updateTargets(request, targets, bitmap, false);
     }
 
-    private static void updateTargets(String url, List<WeakReference<ImageView>> targets,
+    private static void updateTargets(CoverRequest request, List<WeakReference<ImageView>> targets,
                                       Bitmap bitmap, boolean animate) {
         for (WeakReference<ImageView> reference : targets) {
             ImageView target = reference.get();
-            if (target != null && url.equals(target.getTag())) show(target, bitmap, animate);
+            if (target != null && request.equals(target.getTag())) show(target, bitmap, animate);
         }
     }
 
@@ -131,38 +141,75 @@ final class AnimeCoverCache implements AutoCloseable {
         }
     }
 
-    void allowRetry() { retryAfter.evictAll(); }
+    void allowRetry() {
+        retryAfter.evictAll();
+        for (CoverRequest request : memory.snapshot().keySet()) {
+            if (request.mutable()) memory.remove(request);
+        }
+    }
 
-    private Bitmap load(String url) {
+    private Bitmap load(CoverRequest request) {
         try {
-            URI uri = URI.create(url);
-            AtomicFile file = new AtomicFile(new File(directory, cacheName(url)));
-            Bitmap cached = decode(readCache(file));
+            AtomicFile file = new AtomicFile(new File(directory, cacheName(request)));
+            Bitmap cached = decode(readCache(file, request.mutable()));
             if (cached != null) return cached;
-            Bitmap bundled = bundledPoster(uri);
-            if (bundled != null) main.post(() -> preview(url, bundled));
-            byte[] bytes = fetch(url);
-            Bitmap loaded = decode(bytes);
-            if (loaded == null && !Thread.currentThread().isInterrupted() && isBangumiCover(uri)) {
-                bytes = fetch(mirror(uri));
-                loaded = decode(bytes);
-                if (loaded == null && !Thread.currentThread().isInterrupted()) {
-                    bytes = fetch(mirror(uri, "images.weserv.nl"));
-                    loaded = decode(bytes);
-                }
+            Bitmap bundled = bundledPoster(request.subjectId());
+            if (bundled != null) main.post(() -> preview(request, bundled));
+            for (String address : imageRoutes(request)) {
+                if (Thread.currentThread().isInterrupted()) return null;
+                byte[] bytes = fetch(address);
+                Bitmap loaded = decode(bytes);
+                if (loaded == null) continue;
+                if (!Thread.currentThread().isInterrupted()) writeCache(file, bytes);
+                return loaded;
             }
-            if (loaded != null && !Thread.currentThread().isInterrupted()) writeCache(file, bytes);
-            return loaded;
+            return null;
         } catch (IOException | IllegalArgumentException failure) {
             return null;
         }
     }
 
-    private Bitmap bundledPoster(URI uri) {
-        if (!isBangumiCover(uri)) return null;
-        Matcher subject = COVER_SUBJECT.matcher(uri.getRawPath());
-        if (!subject.find() || !BUNDLED_SUBJECTS.contains(subject.group(1))) return null;
-        try (InputStream image = assets.open("anime-popular-posters/" + subject.group(1) + ".webp")) {
+    static CoverRequest coverRequest(String url, long subjectId) {
+        if (subjectId > 999_999_999_999L) subjectId = 0;
+        URI image = null;
+        if (url != null && !url.isEmpty()) {
+            try {
+                URI parsed = URI.create(url);
+                if ("https".equalsIgnoreCase(parsed.getScheme()) && parsed.getHost() != null
+                        && parsed.getRawUserInfo() == null) image = parsed;
+            } catch (IllegalArgumentException invalid) {
+                // A known Bangumi subject can still supply its own artwork.
+            }
+        }
+        if (subjectId <= 0 && image != null && isBangumiCover(image)) {
+            Matcher subject = COVER_SUBJECT.matcher(image.getRawPath());
+            if (subject.find()) subjectId = Long.parseLong(subject.group(1));
+        }
+        if (image == null && subjectId > 0) image = URI.create(AnimeDiscovery.subjectCover(subjectId));
+        return image == null ? null : new CoverRequest(image, Math.max(0L, subjectId));
+    }
+
+    static List<String> imageRoutes(CoverRequest request) throws IOException {
+        URI image = request.image();
+        URI relayImage = image;
+        List<String> routes = new ArrayList<>();
+        routes.add(image.toString());
+        if (!isSubjectCover(image) && request.subjectId() > 0) {
+            // The subject endpoint can redirect to a newer poster or a smaller rendition.
+            relayImage = URI.create(AnimeDiscovery.subjectCover(request.subjectId()));
+            routes.add(relayImage.toString());
+        } else if (!isBangumiCover(image)) {
+            return List.copyOf(routes);
+        }
+        routes.add(mirror(isBangumiCover(image) ? image : relayImage));
+        routes.add(mirror(relayImage, "images.weserv.nl"));
+        return List.copyOf(routes);
+    }
+
+    private Bitmap bundledPoster(long subjectId) {
+        String subject = Long.toString(subjectId);
+        if (!BUNDLED_SUBJECTS.contains(subject)) return null;
+        try (InputStream image = assets.open("anime-popular-posters/" + subject + ".webp")) {
             return BitmapFactory.decodeStream(image);
         } catch (IOException unavailable) {
             return null;
@@ -183,7 +230,11 @@ final class AnimeCoverCache implements AutoCloseable {
         String path = uri.getRawPath();
         if (path == null || !path.equals(uri.normalize().getRawPath())) return false;
         return "lain.bgm.tv".equalsIgnoreCase(uri.getHost()) && CDN_COVER.matcher(path).matches()
-                || "api.bgm.tv".equalsIgnoreCase(uri.getHost()) && API_COVER.matcher(path).matches();
+                || isSubjectCover(uri);
+    }
+
+    private static boolean isSubjectCover(URI uri) {
+        return "api.bgm.tv".equalsIgnoreCase(uri.getHost()) && API_COVER.matcher(uri.getRawPath()).matches();
     }
 
     static String mirror(URI uri) throws IOException { return mirror(uri, "wsrv.nl"); }
@@ -196,9 +247,10 @@ final class AnimeCoverCache implements AutoCloseable {
         return "https://" + host + "/?url=" + URLEncoder.encode(source, "UTF-8");
     }
 
-    private static String cacheName(String url) throws IOException {
+    private static String cacheName(CoverRequest request) throws IOException {
         try {
-            byte[] key = MessageDigest.getInstance("SHA-256").digest(url.getBytes(StandardCharsets.UTF_8));
+            String identity = request.image() + "\n" + request.subjectId();
+            byte[] key = MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8));
             return android.util.Base64.encodeToString(key, android.util.Base64.URL_SAFE
                     | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP) + ".img";
         } catch (NoSuchAlgorithmException unavailable) {
@@ -206,13 +258,16 @@ final class AnimeCoverCache implements AutoCloseable {
         }
     }
 
-    private static byte[] readCache(AtomicFile file) {
+    private static byte[] readCache(AtomicFile file, boolean mutable) {
         synchronized (DISK_LOCK) {
             File data = file.getBaseFile();
             if (!data.isFile() || data.length() <= 0 || data.length() > MAX_BYTES) return null;
+            long now = System.currentTimeMillis();
+            long age = now - data.lastModified();
+            if (mutable && (age < 0 || age > SUBJECT_COVER_MAX_AGE)) return null;
             try {
                 byte[] bytes = file.readFully();
-                data.setLastModified(System.currentTimeMillis());
+                if (!mutable) data.setLastModified(now);
                 return bytes;
             } catch (IOException failure) {
                 return null;

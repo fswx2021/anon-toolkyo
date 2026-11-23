@@ -194,7 +194,8 @@ final class ReaderSection {
     private boolean downloadedChaptersOnly;
     private ReaderEngine.Page loadedPage;
     private int chapterIndex = -1;
-    private boolean controlsVisible, seekingReader, savePending, chapterOpened, returnToHistory;
+    private boolean controlsVisible, seekingReader, savePending, returnToHistory;
+    private String historyVisitBook = "";
 
     ReaderSection(Activity host, boolean manga, int pickerRequestCode, ReaderCache offline,
                   Runnable onScreenChanged) {
@@ -265,6 +266,7 @@ final class ReaderSection {
         state.putString("reader_chapter", chapters.get(chapterIndex).url);
         state.putBoolean("reader_controls", controlsVisible);
         state.putBoolean("reader_from_history", returnToHistory);
+        state.putBoolean("reader_visit_recorded", ReaderProgress.key(book).equals(historyVisitBook));
     }
 
     void restoreState(Bundle state) {
@@ -283,7 +285,12 @@ final class ReaderSection {
         book = entry == null ? new ReaderEngine.Book(source, state.getString("reader_title", ""),
                 state.getString("reader_author", ""), "", "", state.getString("reader_url", ""),
                 state.getString("reader_toc", "")) : entry.toBook(source);
-        showContents(true, state.getString("reader_chapter", ""));
+        String chapter = state.getString("reader_chapter", "");
+        showContents(true, chapter);
+        if (state.getBoolean("reader_visit_recorded",
+                entry != null && entry.historyTime > 0 && chapter.equals(entry.chapterUrl))) {
+            historyVisitBook = key;
+        }
     }
 
     void onSelected() {
@@ -391,7 +398,7 @@ final class ReaderSection {
         novelReader = null;
         novelFind = null;
         loadedPage = null;
-        chapterOpened = false;
+        if (destination != Screen.READER) historyVisitBook = "";
         seekingReader = false;
         seekOrigin = null;
         undoSeek = null;
@@ -554,7 +561,7 @@ final class ReaderSection {
         if (shelfGrid) {
             bindShelfGrid(feedList, cells, displayedShelfColumns);
         } else {
-            bindList(feedList, cells, true, true);
+            bindList(feedList, cells, true, true, true);
             feedList.setOnItemLongClickListener((parent, child, position, id) -> {
                 Cell cell = (Cell) parent.getItemAtPosition(position);
                 if (cell == null || cell.onLongClick == null) return false;
@@ -643,11 +650,10 @@ final class ReaderSection {
 
         scene.addView(note("点条目继续阅读，长按可移除。"), lp(M, W));
         List<Cell> cells = new ArrayList<>();
-        java.text.DateFormat timeFormat = java.text.DateFormat.getDateTimeInstance(
-                java.text.DateFormat.SHORT, java.text.DateFormat.SHORT);
         for (ReaderProgress.Entry entry : entries) {
             ReaderSources.Source source = savedSource(entry.sourceId);
-            String subtitle = join(entry.chapterTitle, timeFormat.format(new java.util.Date(entry.historyTime)));
+            String subtitle = HistoryDisplay.summary(host, "阅读", entry.historyCount, entry.historyTime,
+                    entry.historyCountPartial) + "\n" + entry.chapterTitle;
             cells.add(new Cell(entry.title, subtitle, null, entry.cover, source, () -> {
                 if (source == null) {
                     toast("请重新导入此作品的" + sourceWord);
@@ -659,7 +665,7 @@ final class ReaderSection {
                     .setPositiveButton("移除记录", (dialog, which) -> {
                         progress.hideHistory(entry);
                         showHistory();
-                    }))));
+                    })), true));
         }
         ListView list = newList();
         bindList(list, cells);
@@ -1090,7 +1096,7 @@ final class ReaderSection {
         TextView listSettings = homeAction("管理", false, () ->
                 showDialog(new AlertDialog.Builder(host).setTitle("管理书架")
                         .setItems(new String[]{"筛选 · " + SHELF_FILTERS[shelfFilter],
-                                "排序 · " + SHELF_ORDERS[shelfOrder], groupName, "整理分组", "检查更新"},
+                                "排序 · " + SHELF_ORDERS[shelfOrder], groupName, "整理分组", "检查更新", "已移出书架"},
                                 (dialog, which) -> {
                                     switch (which) {
                                         case 0: chooseShelfSetting("书架筛选", "filter", SHELF_FILTERS, shelfFilter); break;
@@ -1098,6 +1104,7 @@ final class ReaderSection {
                                         case 2: chooseShelfGroup(); break;
                                         case 3: showGroupManagement(); break;
                                         case 4: checkShelfUpdates(); break;
+                                        case 5: showRemovedShelfEntries(); break;
                                     }
                                 }).setNegativeButton("关闭", null)));
         listSettings.setContentDescription("管理书架");
@@ -1314,7 +1321,39 @@ final class ReaderSection {
                         return;
                     }
                     selectBook(entry.toBook(source));
-                }, () -> assignGroup(entry));
+                }, () -> showShelfActions(entry));
+    }
+
+    private void showShelfActions(ReaderProgress.Entry entry) {
+        showDialog(new AlertDialog.Builder(host).setTitle(entry.title)
+                .setItems(new String[]{"移动到分组", "从书架移除"}, (dialog, index) -> {
+                    if (index == 0) assignGroup(entry);
+                    else confirmShelfRemoval(entry);
+                }).setNegativeButton("取消", null));
+    }
+
+    private void confirmShelfRemoval(ReaderProgress.Entry entry) {
+        showDialog(new AlertDialog.Builder(host).setTitle("从书架移除「" + entry.title + "」？")
+                .setMessage("本地书籍、已下载章节、阅读进度和书签会保留。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("移除", (dialog, which) -> {
+                    progress.setOnShelf(entry, false);
+                    renderFeed();
+                    toast("已从书架移除");
+                }));
+    }
+
+    private void showRemovedShelfEntries() {
+        List<ReaderProgress.Entry> removed = progress.entries();
+        removed.removeIf(entry -> !entry.hiddenOnShelf);
+        if (removed.isEmpty()) { toast("没有已移出的作品"); return; }
+        String[] titles = removed.stream().map(entry -> entry.title).toArray(String[]::new);
+        showDialog(new AlertDialog.Builder(host).setTitle("选择要放回书架的作品")
+                .setItems(titles, (dialog, index) -> {
+                    progress.setOnShelf(removed.get(index), true);
+                    renderFeed();
+                    toast("已放回书架");
+                }).setNegativeButton("关闭", null));
     }
 
     private ReaderSources.Source savedSource(String id) {
@@ -3076,6 +3115,7 @@ final class ReaderSection {
         int reopen = reopenChapter.isEmpty() ? -1 : chapterAt(reopenChapter);
         if (reopen >= 0) openChapter(reopen, true);
         else {
+            historyVisitBook = "";
             if (!message.isEmpty()) toast(message);
             renderContents(false, "");
         }
@@ -3139,7 +3179,8 @@ final class ReaderSection {
         read.setEnabled(!chapters.isEmpty());
         addEqual(actions, read, false);
         boolean favored = old != null && old.favorite;
-        addEqual(actions, action(favored ? "取消收藏" : "收藏", false, () -> {
+        String favoriteLabel = favored ? "取消收藏" : old != null && old.hiddenOnShelf ? "放回书架" : "收藏";
+        addEqual(actions, action(favoriteLabel, false, () -> {
             ReaderProgress.Entry entry = progress.get(book);
             progress.favorite(book, entry == null || !entry.favorite);
             TextView button = (TextView) actions.getChildAt(1);
@@ -3150,7 +3191,7 @@ final class ReaderSection {
             addEqual(actions, action("换源", false, this::showAlternateSources), true);
         }
         panel.addView(actions, lp(M, W));
-        if (localBook(book)) panel.addView(action("移除本地书籍", false, this::removeLocalBook), lp(M, 44));
+        if (localBook(book)) panel.addView(action("删除导入的副本", false, this::removeLocalBook), lp(M, 44));
         if (!chapters.isEmpty()) {
             LinearLayout tools = row();
             tools.setPadding(0, dp(7), 0, 0);
@@ -3336,7 +3377,6 @@ final class ReaderSection {
                         return;
                     }
                     loadedPage = page;
-                    chapterOpened = true;
                     body.removeAllViews();
                     boolean comicPages = manga && !page.images.isEmpty();
                     ReaderProgress.Position start = position;
@@ -3347,6 +3387,15 @@ final class ReaderSection {
                     }
                     if (comicPages) showManga(body, chapter, page, start, epoch);
                     else showNovel(body, novelText, start, epoch);
+                    String visit = ReaderProgress.key(chapter.book);
+                    if (!visit.equals(historyVisitBook)) {
+                        ReaderProgress.Position initial = readingPosition();
+                        if (initial == null) initial = start == null
+                                ? new ReaderProgress.Position(0, 0, comicPages
+                                        ? ReaderProgress.IMAGE_FRACTION : ReaderProgress.TEXT_OFFSET) : start;
+                        progress.mark(chapter, initial, chapters, chapterIndex, true);
+                        historyVisitBook = visit;
+                    }
                     int span = mangaReader != null ? page.images.size() : novelReader.length();
                     readerSeek.setMax(Math.max(1, span - 1));
                     readerSeek.setEnabled(span > 1);
@@ -3869,7 +3918,7 @@ final class ReaderSection {
     private void removeLocalBook() {
         ReaderEngine.Book selected = book;
         int epoch = viewEpoch;
-        showDialog(new AlertDialog.Builder(host).setTitle("移除本地书籍？")
+        showDialog(new AlertDialog.Builder(host).setTitle("删除导入的副本？")
                 .setMessage("将删除应用内的副本、进度和书签。原始文件会保留。")
                 .setNegativeButton("取消", null).setPositiveButton("移除", (dialog, which) -> imports.submit(() -> {
                     try {
@@ -4051,7 +4100,7 @@ final class ReaderSection {
         scene.addView(loading, inset(5, 2));
         pageTask = navigation.submit(() -> {
             List<ReaderEngine.Book> legacy = new ArrayList<>();
-            for (ReaderProgress.Entry entry : progress.shelf()) {
+            for (ReaderProgress.Entry entry : progress.entries()) {
                 ReaderSources.Source source = savedSource(entry.sourceId);
                 if (source != null && !ReaderLocalBooks.isSource(source.id, kind)) legacy.add(entry.toBook(source));
             }
@@ -4240,8 +4289,7 @@ final class ReaderSection {
         savePending = false;
         ReaderProgress.Position position = readingPosition();
         if (position != null && chapterIndex >= 0) {
-            progress.mark(chapters.get(chapterIndex), position, chapters, chapterIndex, chapterOpened);
-            chapterOpened = false;
+            progress.mark(chapters.get(chapterIndex), position, chapters, chapterIndex);
         }
     }
 
@@ -4253,6 +4301,7 @@ final class ReaderSection {
         final String title, subtitle, badge, artwork;
         final ReaderSources.Source source;
         final Runnable onClick, onLongClick;
+        final boolean wrapSubtitle;
 
         Cell(String title, String subtitle, String badge, String artwork,
              ReaderSources.Source source, Runnable onClick) {
@@ -4261,6 +4310,11 @@ final class ReaderSection {
 
         Cell(String title, String subtitle, String badge, String artwork,
              ReaderSources.Source source, Runnable onClick, Runnable onLongClick) {
+            this(title, subtitle, badge, artwork, source, onClick, onLongClick, false);
+        }
+
+        Cell(String title, String subtitle, String badge, String artwork,
+             ReaderSources.Source source, Runnable onClick, Runnable onLongClick, boolean wrapSubtitle) {
             this.title = title;
             this.subtitle = subtitle;
             this.badge = badge;
@@ -4268,15 +4322,19 @@ final class ReaderSection {
             this.source = source;
             this.onClick = onClick;
             this.onLongClick = onLongClick;
+            this.wrapSubtitle = wrapSubtitle;
         }
     }
 
     private final class CellView extends LinearLayout {
         private final TextView title, subtitle, badge;
         private final ImageSlot cover;
+        private final View shelfMenu;
         private Cell bound;
 
-        CellView(boolean paper) {
+        CellView(boolean paper) { this(paper, false); }
+
+        CellView(boolean paper, boolean shelfControls) {
             super(host);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
@@ -4302,12 +4360,24 @@ final class ReaderSection {
             badge.setPadding(dp(6), dp(5), dp(5), dp(5));
             if (!paper) badge.setBackground(surface(host, SOFT_MINT, 8, 0));
             addView(badge, lp(W, W));
-            addView(new Icon(host, "chevron", MUTED, 14), lp(22, 30));
+            if (shelfControls) {
+                shelfMenu = iconButton("more", "书架操作", () -> bound.onLongClick.run());
+                shelfMenu.setFocusable(false);
+                addView(shelfMenu, lp(44, 44));
+            } else {
+                shelfMenu = null;
+                addView(new Icon(host, "chevron", MUTED, 14), lp(22, 30));
+            }
         }
 
         void bind(Cell cell) {
             if (bound == cell) return;
+            if (bound == null || bound.wrapSubtitle != cell.wrapSubtitle) {
+                subtitle.setSingleLine(!cell.wrapSubtitle);
+                if (cell.wrapSubtitle) subtitle.setMaxLines(3);
+            }
             bound = cell;
+            if (shelfMenu != null) shelfMenu.setContentDescription("管理「" + cell.title + "」");
             title.setText(cell.title);
             subtitle.setVisibility(TextUtils.isEmpty(cell.subtitle) ? GONE : VISIBLE);
             subtitle.setText(cell.subtitle);
@@ -4366,6 +4436,7 @@ final class ReaderSection {
 
     private final class ShelfTile extends LinearLayout {
         private final ImageSlot cover;
+        private final View shelfMenu;
         private final TextView title, progressLabel;
         private Cell cell;
 
@@ -4375,7 +4446,17 @@ final class ReaderSection {
             setFocusable(true);
             setBackground(button(host, android.graphics.Color.TRANSPARENT, 6, 0));
             cover = new ImageSlot(true, true);
-            addView(cover, lp(M, W));
+            FrameLayout artwork = new FrameLayout(host);
+            artwork.addView(cover, new FrameLayout.LayoutParams(M, W));
+            shelfMenu = iconButton("more", "书架操作", () -> {
+                if (cell != null) cell.onLongClick.run();
+            });
+            FrameLayout.LayoutParams menuPlacement = new FrameLayout.LayoutParams(dp(44), dp(44),
+                    Gravity.TOP | Gravity.END);
+            menuPlacement.topMargin = dp(4);
+            menuPlacement.setMarginEnd(dp(4));
+            artwork.addView(shelfMenu, menuPlacement);
+            addView(artwork, lp(M, W));
             title = text("", 14, FG, true);
             title.setPadding(0, dp(5), 0, 0);
             title.setSingleLine(true);
@@ -4404,6 +4485,7 @@ final class ReaderSection {
                 return;
             }
             title.setText(next.title);
+            shelfMenu.setContentDescription("管理「" + next.title + "」");
             progressLabel.setText(next.subtitle);
             cover.bind(next.artwork, next.source, next.source == null ? "" : next.source.url);
         }
@@ -4562,6 +4644,10 @@ final class ReaderSection {
     }
 
     private void bindList(ListView list, List<Cell> cells, boolean stableIds, boolean paper) {
+        bindList(list, cells, stableIds, paper, false);
+    }
+
+    private void bindList(ListView list, List<Cell> cells, boolean stableIds, boolean paper, boolean shelfControls) {
         list.setAdapter(new BaseAdapter() {
             @Override public int getCount() { return cells.size(); }
             @Override public Cell getItem(int position) { return cells.get(position); }
@@ -4576,7 +4662,7 @@ final class ReaderSection {
                 } else {
                     outer = new FrameLayout(host);
                     if (!paper) outer.setPadding(0, dp(3), 0, dp(4));
-                    view = new CellView(paper);
+                    view = new CellView(paper, shelfControls);
                     outer.addView(view, new FrameLayout.LayoutParams(M, W));
                 }
                 view.bind(getItem(position));

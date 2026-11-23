@@ -103,7 +103,7 @@ final class AnimeDiscovery {
                 double score = rating == null ? 0 : rating.optDouble("score", 0);
                 int rank = rating == null ? 0 : rating.optInt("rank", 0);
                 String cover = thumbnail(row);
-                if (cover.isEmpty()) cover = "https://api.bgm.tv/v0/subjects/" + id + "/image?type=medium";
+                if (cover.isEmpty()) cover = subjectCover(id);
                 result.add(new Entry(subject, cover,
                         Double.isFinite(score) && score > 0 && score <= 10 ? score : 0, Math.max(0, rank),
                         text(row, "summary", 2_000)));
@@ -133,6 +133,10 @@ final class AnimeDiscovery {
         } catch (IllegalArgumentException malformed) {
             return "";
         }
+    }
+
+    static String subjectCover(long id) {
+        return id > 0 ? "https://api.bgm.tv/v0/subjects/" + id + "/image?type=medium" : "";
     }
 
     private static String text(JSONObject entry, String key, int limit) {

@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -22,10 +23,42 @@ import org.robolectric.shadows.ShadowAlertDialog;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34, application = Application.class)
 public class MusicHistoryTest {
+    @Test public void legacyCountsRemainUnknownAndNewCountsSurviveListEviction() {
+        Application app = RuntimeEnvironment.getApplication();
+        var saved = app.getSharedPreferences(MusicCollections.PREFS, 0);
+        saved.edit().putString(MusicCollections.RECENT, "[\"legacy\"]").apply();
+        assertTrue(MusicCollections.readRecentStats(saved.getString(MusicCollections.RECENT_STATS, "{}")).isEmpty());
+
+        MusicCollections.recordPlayed(saved, "legacy", 1_000L);
+        MusicCollections.recordPlayed(saved, "legacy", 2_000L);
+        for (int i = 0; i < 100; i++) {
+            MusicCollections.recordPlayed(saved, "track-" + i, 3_000L + i);
+        }
+        assertEquals(100, MusicCollections.readIds(saved.getString(MusicCollections.RECENT, "[]")).size());
+        assertEquals(new MusicCollections.HistoryStats(2_000L, 2L, true), recentStats(saved).get("legacy"));
+        assertEquals(new MusicCollections.HistoryStats(3_099L, 1L, false), recentStats(saved).get("track-99"));
+
+        MusicCollections.recordPlayed(saved, "legacy", 4_000L);
+        assertEquals("legacy", MusicCollections.readIds(saved.getString(MusicCollections.RECENT, "[]")).get(0));
+        assertEquals(new MusicCollections.HistoryStats(4_000L, 3L, true), recentStats(saved).get("legacy"));
+        MusicCollections.pruneRecent(saved, Set.of("legacy", "track-99"));
+        assertEquals(Set.of("legacy", "track-99"), recentStats(saved).keySet());
+        MusicCollections.removeRecent(saved, "legacy");
+        assertEquals(Set.of("track-99"), recentStats(saved).keySet());
+        MusicCollections.clearRecent(saved);
+        assertTrue(recentStats(saved).isEmpty());
+        assertEquals("[]", saved.getString(MusicCollections.RECENT, "[]"));
+    }
+
+    private static Map<String, MusicCollections.HistoryStats> recentStats(android.content.SharedPreferences saved) {
+        return MusicCollections.readRecentStats(saved.getString(MusicCollections.RECENT_STATS, "{}"));
+    }
+
     @SuppressWarnings("unchecked")
     @Test public void existingHistoryOpensNewestFirstAndCleanupKeepsTheQueue() throws Exception {
         Application app = RuntimeEnvironment.getApplication();

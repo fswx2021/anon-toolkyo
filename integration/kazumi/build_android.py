@@ -51,7 +51,8 @@ def prepare():
     # git archive omits files introduced by our patches. Remove only those generated
     # files so repeated builds can apply the same checked patches to pristine inputs.
     for name in ("embed-2.4.5.patch", "data-2.4.5.patch", "feature-pages-2.4.5.patch",
-                 "android-media-2.4.5.patch", "band-loading-2.4.5.patch"):
+                 "android-media-2.4.5.patch", "band-loading-2.4.5.patch", "watch-history-2.4.5.patch",
+                 "covers-2.4.5.patch"):
         patch = HERE / name
         for added in re.findall(r"^--- /dev/null\n\+\+\+ b/(.+)$",
                                 patch.read_text(encoding="utf-8"), re.MULTILINE):

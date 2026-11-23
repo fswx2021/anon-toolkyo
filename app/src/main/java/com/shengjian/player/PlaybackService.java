@@ -144,6 +144,7 @@ public final class PlaybackService extends Service {
     private long sleepEndsAt;
     private float speed = 1f;
     private String error = "";
+    private String recordedPlaybackTrack = "";
 
     private SharedPreferences playbackSettings;
     private SharedPreferences musicSettings;
@@ -445,10 +446,7 @@ public final class PlaybackService extends Service {
     void refreshQueue(List<Track> library) {
         Map<String, Track> available = new LinkedHashMap<>();
         for (Track item : library) available.put(item.id, item);
-        List<String> recentTracks = MusicCollections.readIds(musicSettings.getString(MusicCollections.RECENT, "[]"));
-        if (recentTracks.removeIf(id -> !available.containsKey(id))) {
-            musicSettings.edit().putString(MusicCollections.RECENT, MusicCollections.writeIds(recentTracks)).apply();
-        }
+        MusicCollections.pruneRecent(musicSettings, available.keySet());
         if (queue.isEmpty()) return;
         List<Track> updated = new ArrayList<>();
         for (Track item : queue) if (available.containsKey(item.id)) updated.add(available.get(item.id));
@@ -655,6 +653,7 @@ public final class PlaybackService extends Service {
         Track track = currentTrack();
         if (track == null) return;
 
+        if (!track.id.equals(recordedPlaybackTrack)) recordedPlaybackTrack = "";
         releasePlayer();
         if (!autoplay) {
             releaseAudioFocus();
@@ -873,12 +872,9 @@ public final class PlaybackService extends Service {
                 musicSettings.edit().putFloat(MusicCollections.SPEED, speed).apply();
             }
             Track startedTrack = currentTrack();
-            if (startedTrack != null) {
-                List<String> recentTracks = MusicCollections.readIds(musicSettings.getString(MusicCollections.RECENT, "[]"));
-                if (recentTracks.isEmpty() || !recentTracks.get(0).equals(startedTrack.id)) {
-                    MusicCollections.recordRecent(recentTracks, startedTrack.id);
-                    musicSettings.edit().putString(MusicCollections.RECENT, MusicCollections.writeIds(recentTracks)).apply();
-                }
+            if (startedTrack != null && !startedTrack.id.equals(recordedPlaybackTrack)) {
+                MusicCollections.recordPlayed(musicSettings, startedTrack.id, System.currentTimeMillis());
+                recordedPlaybackTrack = startedTrack.id;
             }
             mainHandler.removeCallbacks(savePlayback);
             mainHandler.postDelayed(savePlayback, 5_000);
@@ -947,6 +943,7 @@ public final class PlaybackService extends Service {
 
     private void onCompleted(MediaPlayer finished) {
         if (finished != player) return;
+        recordedPlaybackTrack = "";
         playing = false;
         mainHandler.removeCallbacks(savePlayback);
         persistPlaybackPosition();
@@ -1085,6 +1082,7 @@ public final class PlaybackService extends Service {
 
     private void clearCurrentTrack() {
         index = -1;
+        recordedPlaybackTrack = "";
         lastPosition = 0;
         mediaDuration = 0;
         error = "";

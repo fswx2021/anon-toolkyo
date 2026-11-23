@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_modular/flutter_modular.dart';
+import 'package:kazumi/anon/subject_cover.dart';
 import 'package:kazumi/bean/widget/bangumi_mirror_error_widget.dart';
 import 'package:kazumi/bean/widget/loading_indicator.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
@@ -44,12 +45,7 @@ class _SubjectPageState extends State<SubjectPage> {
                 'rating': <String, dynamic>{},
                 'images': <String, String>{},
               });
-          if (!item.images.values.any((url) => url.startsWith('https://lain.bgm.tv/'))) {
-            item.images = {
-              for (final size in ['large', 'common', 'medium', 'small', 'grid'])
-                size: 'assets/anon/posters/$id.webp',
-            };
-          }
+          item.images = withBundledSubjectCover(id, item.images);
           return item;
         }
       }

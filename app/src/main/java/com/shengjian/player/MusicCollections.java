@@ -1,5 +1,7 @@
 package com.shengjian.player;
 
+import android.content.SharedPreferences;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -7,8 +9,10 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -16,12 +20,15 @@ final class MusicCollections {
     static final String PREFS = "music_collections";
     static final String STATE = "state";
     static final String RECENT = "recent";
+    static final String RECENT_STATS = "recent_stats";
     static final String QUEUE = "queue";
     static final String SHUFFLE_ORDER = "shuffle_order";
     static final String CURRENT = "current";
     static final String POSITION = "position";
     static final String SPEED = "speed";
     private static final int MAX_RECENT = 100;
+
+    record HistoryStats(long lastPlayedAt, long playCount, boolean previousCountUnknown) {}
 
     static final class Playlist {
         final String id;
@@ -131,5 +138,70 @@ final class MusicCollections {
         items.remove(id);
         items.add(0, id);
         if (items.size() > MAX_RECENT) items.subList(MAX_RECENT, items.size()).clear();
+    }
+
+    static Map<String, HistoryStats> readRecentStats(String json) {
+        Map<String, HistoryStats> result = new LinkedHashMap<>();
+        if (json == null || json.isEmpty()) return result;
+        try {
+            JSONObject saved = new JSONObject(json);
+            for (var keys = saved.keys(); keys.hasNext(); ) {
+                String id = keys.next();
+                JSONObject row = saved.optJSONObject(id);
+                if (row == null || id.isEmpty()) continue;
+                long playedAt = row.optLong("last_played");
+                long count = row.optLong("count");
+                if (playedAt > 0 && count > 0) {
+                    result.put(id, new HistoryStats(playedAt, count, row.optBoolean("older_count_unknown")));
+                }
+            }
+        } catch (JSONException invalid) {
+            return result;
+        }
+        return result;
+    }
+
+    static synchronized void recordPlayed(SharedPreferences preferences, String id, long playedAt) {
+        if (id.isEmpty() || playedAt <= 0) return;
+        List<String> ids = readIds(preferences.getString(RECENT, "[]"));
+        Map<String, HistoryStats> stats = readRecentStats(preferences.getString(RECENT_STATS, "{}"));
+        HistoryStats prior = stats.get(id);
+        long count = prior == null ? 1 : Math.min(prior.playCount(), Long.MAX_VALUE - 1) + 1;
+        boolean olderCountUnknown = prior == null ? ids.contains(id) : prior.previousCountUnknown();
+        stats.put(id, new HistoryStats(playedAt, count, olderCountUnknown));
+        recordRecent(ids, id);
+        saveRecent(preferences, ids, stats);
+    }
+
+    static synchronized void clearRecent(SharedPreferences preferences) {
+        preferences.edit().remove(RECENT).remove(RECENT_STATS).apply();
+    }
+
+    static synchronized void removeRecent(SharedPreferences preferences, String id) {
+        List<String> ids = readIds(preferences.getString(RECENT, "[]"));
+        Map<String, HistoryStats> stats = readRecentStats(preferences.getString(RECENT_STATS, "{}"));
+        boolean removed = ids.remove(id);
+        if (stats.remove(id) != null || removed) saveRecent(preferences, ids, stats);
+    }
+
+    static synchronized void pruneRecent(SharedPreferences preferences, Set<String> available) {
+        List<String> ids = readIds(preferences.getString(RECENT, "[]"));
+        Map<String, HistoryStats> stats = readRecentStats(preferences.getString(RECENT_STATS, "{}"));
+        boolean changed = ids.retainAll(available);
+        if (stats.keySet().retainAll(available) || changed) saveRecent(preferences, ids, stats);
+    }
+
+    private static void saveRecent(SharedPreferences preferences, List<String> ids, Map<String, HistoryStats> stats) {
+        JSONObject saved = new JSONObject();
+        try {
+            for (Map.Entry<String, HistoryStats> item : stats.entrySet()) {
+                HistoryStats row = item.getValue();
+                saved.put(item.getKey(), new JSONObject().put("last_played", row.lastPlayedAt())
+                        .put("count", row.playCount()).put("older_count_unknown", row.previousCountUnknown()));
+            }
+        } catch (JSONException impossible) {
+            throw new IllegalStateException("Invalid music history", impossible);
+        }
+        preferences.edit().putString(RECENT, writeIds(ids)).putString(RECENT_STATS, saved.toString()).apply();
     }
 }
