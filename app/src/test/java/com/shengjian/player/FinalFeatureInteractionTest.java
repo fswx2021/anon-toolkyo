@@ -20,6 +20,7 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowDialog;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URI;
@@ -121,6 +122,38 @@ public class FinalFeatureInteractionTest {
         }
     }
 
+    @Test public void initialSourceSetupCanBeSkippedAndReopenedFromSettings() throws Exception {
+        Application app = RuntimeEnvironment.getApplication();
+        shadowOf(app).declareComponentUnbindable(new ComponentName(app, PlaybackService.class));
+        try (var controller = Robolectric.buildActivity(MainActivity.class, new Intent(app, MainActivity.class)).create()) {
+            MainActivity host = controller.get();
+            Method shouldOffer = MainActivity.class.getDeclaredMethod("shouldOfferSourceSetup");
+            shouldOffer.setAccessible(true);
+            assertEquals(true, shouldOffer.invoke(host));
+            InitialSourceSetup sourceSetup = (InitialSourceSetup) field(MainActivity.class, "sourceSetup").get(host);
+            sourceSetup.music.setEnabled("bilibili", false);
+            assertEquals(false, shouldOffer.invoke(host));
+
+            Method settings = MainActivity.class.getDeclaredMethod("showAppSettings");
+            settings.setAccessible(true);
+            settings.invoke(host);
+            clickSettingsRow(host, "一键聚合四个模块");
+            Dialog setup = ShadowDialog.getLatestDialog();
+            assertNotNull(setup);
+            assertNotNull(label(setup.getWindow().getDecorView(), "一键聚合并启用"));
+            for (String module : List.of("音乐", "漫画", "小说", "动画")) {
+                assertNotNull(label(setup.getWindow().getDecorView(), module));
+            }
+            assertTrue(label(setup.getWindow().getDecorView(), "稍后").performClick());
+            shadowOf(Looper.getMainLooper()).idle();
+            assertTrue(host.getSharedPreferences("app_settings", 0).getBoolean("source_setup_seen", false));
+            clickSettingsRow(host, "一键聚合四个模块");
+            Dialog reopened = ShadowDialog.getLatestDialog();
+            assertTrue(reopened != setup && reopened.isShowing());
+            assertNotNull(label(reopened.getWindow().getDecorView(), "一键聚合并启用"));
+        }
+    }
+
     private static void clickSettingsRow(MainActivity host, String title) {
         TextView entry = label(host.getWindow().getDecorView(), title);
         assertNotNull(title, entry);
@@ -189,7 +222,8 @@ public class FinalFeatureInteractionTest {
         var saving = new AtomicReference<MusicOnlineEngine.Song>();
         var song = new MusicOnlineEngine.Song(MusicOnlineEngine.BILIBILI, "BVTEST", "搜索结果", "歌手", "", "", 120000);
         try (var section = new MusicOnlineSection(host, playing::set, saving::set,
-                new FrameLayout(host), (view, url) -> {})) {
+                new FrameLayout(host), (view, url) -> {}, new MusicSourceCatalog.Store(
+                        new java.io.File(host.getFilesDir(), "music-sources.json")))) {
             Class<?> rowClass = Class.forName(MusicOnlineSection.class.getName() + "$SongRow");
             var rowConstructor = rowClass.getDeclaredConstructor(MusicOnlineSection.class);
             rowConstructor.setAccessible(true);

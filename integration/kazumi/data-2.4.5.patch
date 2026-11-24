@@ -30,7 +30,7 @@ diff --git a/lib/services/storage/anon_legacy_import.dart b/lib/services/storage
 new file mode 100644
 --- /dev/null
 +++ b/lib/services/storage/anon_legacy_import.dart
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,110 @@
 +import 'dart:convert';
 +import 'dart:io';
 +
@@ -85,7 +85,10 @@ new file mode 100644
 +        final rows = jsonDecode(await file.readAsString()) as List;
 +        if (rows.isEmpty) return false;
 +        final existing = plugins.pluginList.map((p) => pluginNameKey(p.name)).toSet();
-+        final pending = pendingRules(rows, existing);
++        final pending = pendingRules([
++          for (final row in rows)
++            if (row is Map && row['startupEnabled'] != true) row,
++        ], existing);
 +        if (pending.isNotEmpty) await plugins.updatePlugins(pending);
 +        return true;
 +      });

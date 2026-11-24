@@ -284,6 +284,9 @@ final class ReaderEngine {
         if (list.isEmpty()) throw new ReaderSources.RuleFailure("此来源缺少书籍列表规则");
         Data data = download(source, source.url, url, query, page, true);
         checkSearchResponse(data);
+        if (source.kind == ReaderSources.COMIC && !query.trim().isEmpty() && emptyComicSearchPage(data.root)) {
+            return Collections.emptyList();
+        }
         ReaderSearchQueue.RequestBudget budget = ReaderSearchQueue.RequestBudget.current();
         boolean legadoSearch = !data.yiciyuan && !query.trim().isEmpty();
         String detailPattern = legadoSearch ? field(source.definition, "bookUrlPattern") : "";
@@ -387,6 +390,14 @@ final class ReaderEngine {
                     && data.raw.contains("buid")) {
             throw new ReaderSources.SiteFailure("来源站点要求完成访问验证");
         }
+    }
+
+    private static boolean emptyComicSearchPage(Object root) {
+        if (!(root instanceof Document)) return false;
+        Element heading = ((Document) root).selectFirst(
+                "body.p-search .search-page-wr[data-count=0] .search-comic-list .search_head");
+        // 漫客栈 includes recommendation cards using the same classes as hits on a zero-result page.
+        return heading != null && heading.text().contains("您搜索的内容暂时没有找到");
     }
 
     private static void checkEmptySearchResponse(Object root) throws ReaderSources.SiteFailure {

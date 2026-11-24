@@ -33,6 +33,10 @@ public class AppUpdatesTest {
     private static final String ASSET_API = "https://api.github.com/repos/" + REPO + "/releases/assets/";
     private static final String MIRROR = "https://updates.example.org/anon/";
     private static final String MIRROR_APK = MIRROR + "v0.29.10/" + APK_NAME;
+    private static final String GITEE_REPO = "publisher/anon-toolkyo";
+    private static final String GITEE_API = "https://gitee.com/api/v5/repos/" + GITEE_REPO + "/releases/latest";
+    private static final String GITEE_ASSETS = "https://gitee.com/" + GITEE_REPO + "/releases/download/v0.29.10/";
+    private static final String GITEE_APK = GITEE_ASSETS + APK_NAME;
     private static final String DIGEST = "0123456789abcdef".repeat(4);
 
     @Test public void usesPinnedReleaseAssetsAndOrdersUpdatesByVersionCode() throws Exception {
@@ -131,17 +135,83 @@ public class AppUpdatesTest {
             throw new IOException("GitHub is not reachable");
         });
         AppUpdates.Release latest = updates.latest();
-        assertEquals(List.of(API, LATEST_MANIFEST, MIRROR + "update.json"), calls);
+        assertEquals(List.of(MIRROR + "update.json"), calls);
         assertEquals(URI.create(MIRROR_APK), latest.websiteUrl());
         assertEquals(List.of(URI.create(MIRROR_APK), URI.create(APK)), latest.downloadUrls());
 
         String originalManifest = manifest(APK, 70);
         String originalRelease = release(ASSETS + "update.json", false, DIGEST);
         AppUpdates reachable = new AppUpdates(REPO, MIRROR, (address, limit, asset) -> {
-            assertFalse(address.toString().startsWith(MIRROR));
+            if (address.toString().startsWith(MIRROR)) return null;
             return response(asset ? originalManifest : originalRelease);
         });
         assertEquals(List.of(URI.create(APK), URI.create(MIRROR_APK)), reachable.latest().downloadUrls());
+    }
+
+    @Test public void downloadsFromGiteeWithoutContactingGithubWhenDomesticReleaseIsNewer() throws Exception {
+        List<String> calls = new ArrayList<>();
+        String release = release(ASSETS + "update.json", false, DIGEST);
+        String manifest = manifest(APK, 70);
+        AppUpdates updates = new AppUpdates(REPO, "", GITEE_REPO, (address, limit, asset) -> {
+            calls.add(address.toString());
+            if (address.toString().equals(GITEE_API)) return response(release);
+            assertEquals(GITEE_ASSETS + "update.json", address.toString());
+            return response(manifest);
+        });
+        AppUpdates.Release latest = updates.latest(69);
+        assertEquals(List.of(GITEE_API, GITEE_ASSETS + "update.json"), calls);
+        assertEquals(List.of(URI.create(GITEE_APK), URI.create(APK)), latest.downloadUrls());
+        assertEquals(URI.create("https://gitee.com/" + GITEE_REPO + "/releases/tag/v0.29.10"), latest.websiteUrl());
+        assertEquals(DIGEST, latest.sha256());
+    }
+
+    @Test public void fallsBackToGithubWhenGiteeIsStaleInvalidOrInaccessible() throws Exception {
+        String release = release(ASSETS + "update.json", false, DIGEST);
+        String githubManifest = manifest(APK, 70);
+        for (String giteeManifest : new String[] {manifest(GITEE_APK, 69),
+                manifest(GITEE_APK.replace("/publisher/", "/foreign/"), 70), null}) {
+            AppUpdates updates = new AppUpdates(REPO, "", GITEE_REPO, (address, limit, asset) -> {
+                String value = address.toString();
+                if (value.equals(GITEE_API)) {
+                    if (giteeManifest == null) throw new IOException("offline");
+                    return response(release);
+                }
+                if (value.startsWith(GITEE_ASSETS)) return response(giteeManifest);
+                return response(asset ? githubManifest : release);
+            });
+            assertEquals(URI.create(APK), updates.latest(69).apkUrl());
+        }
+    }
+
+    @Test public void findsAStableGiteeReleaseWhenLatestIsAPreview() throws Exception {
+        String preview = release(ASSETS + "update.json", true, DIGEST);
+        String releases = new JSONArray().put(new JSONObject(preview))
+                .put(new JSONObject(release(ASSETS + "update.json", false, DIGEST))).toString();
+        String manifest = manifest(GITEE_APK, 70);
+        AppUpdates updates = new AppUpdates(REPO, "", GITEE_REPO, (address, limit, asset) -> {
+            if (address.toString().equals(GITEE_API)) return response(preview);
+            if (address.toString().equals(GITEE_API.replace("/latest", "?direction=desc&per_page=8"))) {
+                return response(releases);
+            }
+            assertEquals(GITEE_ASSETS + "update.json", address.toString());
+            return response(manifest);
+        });
+        assertEquals(URI.create(GITEE_APK), updates.latest(69).apkUrl());
+    }
+
+    @Test public void giteeAssetRedirectsStayOnTheRepositoryAndKnownAttachmentCdn() throws Exception {
+        URI initial = URI.create(GITEE_APK);
+        String attachment = "/" + GITEE_REPO + "/attach_files/3793043/download/" + APK_NAME;
+        URI intermediate = AppUpdates.apkRedirect(initial, initial, attachment);
+        assertEquals(URI.create("https://gitee.com" + attachment), intermediate);
+        String cdn = "https://foruda.gitee.com/attach_file/1795360714977508753/" + APK_NAME + "?expires=123";
+        assertEquals(URI.create(cdn), AppUpdates.apkRedirect(initial, intermediate, cdn));
+        assertThrows(IOException.class, () -> AppUpdates.apkRedirect(initial, initial,
+                attachment.replace("/publisher/", "/foreign/")));
+        assertThrows(IOException.class, () -> AppUpdates.apkRedirect(initial, intermediate,
+                cdn.replace("foruda.gitee.com", "foruda.gitee.com.example.org")));
+        assertThrows(IOException.class, () -> AppUpdates.apkRedirect(initial, intermediate,
+                cdn.replace(APK_NAME, "different.apk")));
     }
 
     @Test public void rejectsInvalidMirrorBasesAndForeignApksOrRedirects() throws Exception {

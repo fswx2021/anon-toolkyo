@@ -9,8 +9,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.cert.CertificateExpiredException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -301,7 +303,27 @@ final class ReaderSearchVerification {
         restored.record(novel, true, null, now + 4);
         require(restored.priority(novel, now + 4) > restored.priority(updated, now + 4),
                 "recent successful sources outrank unknown ones");
+        verifyMangaHealth(store, now);
         System.out.println("PASS source health persistence, recovery, priority and rule revision reset");
+    }
+
+    private static void verifyMangaHealth(ReaderSources store, long now) throws Exception {
+        ReaderSources.Source comic = store.importText(new JSONObject()
+                .put("bookSourceType", ReaderSources.COMIC).put("bookSourceName", "漫画连接检查")
+                .put("bookSourceUrl", "https://comic.example.test").put("searchUrl", "/find")
+                .put("ruleSearch", new JSONObject().put("bookList", "$.list")).toString(),
+                ReaderSources.COMIC).sources.get(0);
+        ReaderSourceHealth health = new ReaderSourceHealth("");
+        health.record(comic, false, new UnknownHostException(), now);
+        require(!health.deferred(comic, now), "first DNS failure remains eligible");
+        health.record(comic, false, new UnknownHostException(), now + 1);
+        require(health.deferred(comic, now + 1), "repeated manga DNS failure enters temporary cooldown");
+        health.record(comic, false, new IOException(new CertificateExpiredException()), now + 2);
+        require(!health.deferred(comic, now + 2), "different failures do not share a streak");
+        health.record(comic, false, new IOException(new CertificateExpiredException()), now + 3);
+        require(health.deferred(comic, now + 3), "repeated expired certificate enters temporary cooldown");
+        health.record(comic, true, null, now + 4);
+        require(!health.deferred(comic, now + 4), "manual retry can restore the source immediately");
     }
 
     static void verifyRelevance() {

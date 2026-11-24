@@ -160,7 +160,9 @@ python tools/release_android.py --repository fswx2021/anon-toolkyo --previous "�
 
 这台 Windows 电脑可以加上 `--use-cache` 使用已有的离线构建环境。按上述目录命名更新说明时，工具会自动找到对应文件。
 
-默认的更新渠道为 GitHub，程序可尝试其多个官方入口。要为 GitHub 难以直连的网络提供另一条渠道，可在打包时指定 `--mirror-base https://你的域名/updates/`。将镜像输出目录中的版本路径先上传，然后更新其根目录的 `update.json`。镜像应通过该 HTTPS 地址直接返回文件，APK 仍使用同一签名。
+打包时指定 `--gitee-repository 所有者/仓库` 可启用 Gitee 更新。在该公开仓库用同一个版本标签创建正式发行版，并上传与 GitHub 相同的 APK、`update.json` 和 `SHA256SUMS.txt`。应用优先从 Gitee 检查和下载新版，也可从 GitHub 检查更新。APK 仍使用同一签名。 [Gitee 创建发行版](https://help.gitee.com/repository/release/create)
+
+自有 HTTPS 镜像可在打包时指定 `--mirror-base https://你的域名/updates/`。先上传镜像输出目录中的版本路径，再更新镜像根目录的 `update.json`。镜像应通过该 HTTPS 地址直接返回文件。
 
 提交源码后，推送对应的 `v版本号` Git 标签。再次运行时传入 `--apk "build/releases/v新版本/anon-toolkyo-新版本.apk" --create-draft`，并保留上面的仓库、上一版和说明参数，即可用已登录的 Git Credential Manager 创建发布草稿。检查三个附件完整后发布为正式版。
 

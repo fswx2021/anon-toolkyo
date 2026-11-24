@@ -57,7 +57,7 @@ final class ReaderSources {
     static final int ALL = -1;
     static final int NOVEL = 0;
     static final int COMIC = 2;
-    private static final int SEARCH_ENGINE_REVISION = 4;
+    private static final int SEARCH_ENGINE_REVISION = 5;
     private static final int SOURCE_LIMIT = 12 * 1024 * 1024;
     private static final int AGGREGATION_FEED_LIMIT = 24 * 1024 * 1024;
     private static final int CATALOG_LIMIT = 32 * 1024 * 1024;
@@ -168,7 +168,8 @@ final class ReaderSources {
                     ? text(this.definition, "exploreUrl") : "";
             requestHeaders = parseHeaders(this.definition.opt("header"));
             searchRevision = java.util.Objects.hash(SEARCH_ENGINE_REVISION, searchUrl, requestHeaders,
-                    this.definition.optString("ruleSearch"), this.definition.optString("jsLib"));
+                    this.definition.optString("ruleSearch"), this.definition.optString("jsLib"),
+                    this.definition.optString("bookSourceComment"), this.definition.optString("sourceVariable"));
             diagnosticRevision = java.util.Objects.hash(SEARCH_ENGINE_REVISION, this.definition.toString());
         }
 

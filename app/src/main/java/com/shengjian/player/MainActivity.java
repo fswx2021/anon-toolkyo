@@ -4,6 +4,7 @@ import static com.shengjian.player.PlayerViews.*;
 
 import androidx.activity.ComponentActivity;
 import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.ViewModelProvider;
 import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -79,7 +80,7 @@ public final class MainActivity extends ComponentActivity {
     private static ReaderCache readerCache;
     private final ExecutorService images = Executors.newFixedThreadPool(2);
     private final AppUpdates appUpdates = new AppUpdates(
-            BuildConfig.UPDATE_GITHUB_REPOSITORY, BuildConfig.UPDATE_MIRROR_BASE);
+            BuildConfig.UPDATE_GITHUB_REPOSITORY, BuildConfig.UPDATE_MIRROR_BASE, BuildConfig.UPDATE_GITEE_REPOSITORY);
     private final ExecutorService updateRequests = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final LruCache<String, Bitmap> artworkCache = new LruCache<>(20);
@@ -100,6 +101,9 @@ public final class MainActivity extends ComponentActivity {
     private UpdateDownload updateDownload;
     private File pendingUpdateInstall, installAfterPermission;
     private Sheet updateSheet;
+    private InitialSourceSetup sourceSetup;
+    private Sheet sourceSetupSheet;
+    private boolean sourceSetupPending;
     private boolean checkedOnLaunch, checkingAppUpdate, showUpdateCheckResult;
     private int promptedUpdateVersion;
     private boolean backupContent;
@@ -181,6 +185,7 @@ public final class MainActivity extends ComponentActivity {
         PlayerViews.appearance(appearance == 2 || appearance == 0 && systemDark);
         if (PlayerViews.dark()) setTheme(R.style.PlayerDarkTheme);
         super.onCreate(state);
+        sourceSetup = new ViewModelProvider(this).get(InitialSourceSetup.class);
         updateInstaller = new AppUpdateInstaller(this);
         LaunchMotion.useCustomSplash(this);
         library = Library.get(this);
@@ -201,6 +206,7 @@ public final class MainActivity extends ComponentActivity {
             String permissionInstall = state.getString("update_after_permission");
             if (permissionInstall != null) installAfterPermission = new File(permissionInstall);
             promptedUpdateVersion = state.getInt("prompted_update_version");
+            sourceSetupPending = state.getBoolean("source_setup_open");
         }
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -250,12 +256,11 @@ public final class MainActivity extends ComponentActivity {
         Runnable afterLaunch = () -> {
             if (isFinishing() || isDestroyed()) return;
             if (!restoreMessage.isEmpty()) toast(restoreMessage);
-            if (launcherStart && section != ANIME && !appSettings.getBoolean("guide_seen", false) && tracks.isEmpty()
-                    && AndroidReaderSources.get(this).list(ReaderSources.NOVEL).isEmpty()
-                    && AndroidReaderSources.get(this).list(ReaderSources.COMIC).isEmpty()) {
-                showGuide();
+            if (launcherStart) {
+                sourceSetupPending = shouldOfferSourceSetup();
+                presentPendingSourceSetup();
+                checkAppUpdate(false);
             }
-            if (launcherStart) checkAppUpdate(false);
         };
         if (launcherStart) LaunchMotion.show(root, afterLaunch);
         else afterLaunch.run();
@@ -277,6 +282,7 @@ public final class MainActivity extends ComponentActivity {
         if (pendingUpdateInstall != null) state.putString("pending_update_install", pendingUpdateInstall.getPath());
         if (installAfterPermission != null) state.putString("update_after_permission", installAfterPermission.getPath());
         state.putInt("prompted_update_version", promptedUpdateVersion);
+        state.putBoolean("source_setup_open", sourceSetupPending || sourceSetupSheet != null);
         if (!inPlayer && readers[section] != null) readers[section].saveState(state);
         super.onSaveInstanceState(state);
     }
@@ -288,11 +294,17 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onResume() {
         super.onResume();
         if (section == ANIME && anime != null) anime.onSelected();
-        main.post(this::presentPendingAppUpdate);
+        main.post(() -> {
+            presentPendingSourceSetup();
+            presentPendingAppUpdate();
+        });
     }
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) presentPendingAppUpdate();
+        if (hasFocus) {
+            presentPendingSourceSetup();
+            presentPendingAppUpdate();
+        }
     }
     @Override protected void onStop() {
         savePosition();
@@ -301,6 +313,12 @@ public final class MainActivity extends ComponentActivity {
         super.onStop();
     }
     @Override protected void onDestroy() {
+        if (sourceSetupSheet != null) {
+            sourceSetup.listen(null);
+            sourceSetupSheet.dialog.setOnDismissListener(null);
+            sourceSetupSheet.dialog.dismiss();
+            sourceSetupSheet = null;
+        }
         if (effectsDialog != null) effectsDialog.dismiss();
         if (musicDownloadProgress != null) musicDownloadProgress.sheet.dialog.dismiss();
         if (updateDownload != null) updateDownload.transfer.cancel();
@@ -458,7 +476,7 @@ public final class MainActivity extends ComponentActivity {
         FrameLayout musicPages = new FrameLayout(this);
         musicTab.addView(musicPages, new LinearLayout.LayoutParams(M, 0, 1));
         musicOnline = new MusicOnlineSection(this, this::playMusicOnline, this::downloadMusicOnline,
-                musicPages, this::artwork);
+                musicPages, this::artwork, sourceSetup.music);
         LinearLayout music = column();
         musicPages.addView(music, new FrameLayout.LayoutParams(M, M));
         miniCard = buildMiniPlayer();
@@ -642,6 +660,8 @@ public final class MainActivity extends ComponentActivity {
         readers[destination] = reader;
         sectionPages[destination].addView(reader.view(), new FrameLayout.LayoutParams(M, M));
     }
+
+    AnimeSource.Store animeSourceStore() { return sourceSetup.anime; }
 
     private void selectSection(int destination) {
         if (destination < 0 || destination >= SECTION_NAMES.length) destination = MUSIC;
@@ -1583,6 +1603,10 @@ public final class MainActivity extends ComponentActivity {
         addSettingsChoice(general, "默认启动页", "start_section", SECTION_NAMES, false);
 
         LinearLayout data = settingsGroup(content, "存储与数据");
+        addSettingsRow(data, "一键聚合四个模块", null, () -> {
+            sourceSetup.prepare();
+            showInitialSourceSetup();
+        });
         addSettingsRow(data, "下载与存储", null, this::showStorage);
         addSettingsRow(data, "备份与恢复", null, this::showBackups);
         addSettingsRow(data, "旧版动画资料", text("原有追番、观看进度和动画源", 13, MUTED, false), () -> {
@@ -1641,7 +1665,7 @@ public final class MainActivity extends ComponentActivity {
         checkingAppUpdate = true;
         updateRequests.execute(() -> {
             try {
-                AppUpdates.Release release = appUpdates.latest();
+                AppUpdates.Release release = appUpdates.latest(BuildConfig.VERSION_CODE);
                 main.post(() -> finishAppUpdateCheck(release, null));
             } catch (IOException unavailable) {
                 main.post(() -> finishAppUpdateCheck(null, unavailable));
@@ -1681,6 +1705,7 @@ public final class MainActivity extends ComponentActivity {
     private void presentPendingAppUpdate() {
         if (!hasWindowFocus() || isFinishing() || isDestroyed()
                 || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)
+                || sourceSetupSheet != null || sourceSetupPending
                 || updateSheet != null || updateDownload != null || installAfterPermission != null) return;
         if (pendingUpdateInstall != null) {
             File apk = pendingUpdateInstall;
@@ -1983,6 +2008,82 @@ public final class MainActivity extends ComponentActivity {
         openLicenseAsset = null;
         root.removeView(appSettingsPage);
         appSettingsPage = null;
+    }
+
+    private boolean shouldOfferSourceSetup() {
+        if (appSettings.getBoolean("source_setup_seen", false) || !sourceSetup.sourcesAreInitial()) return false;
+        try {
+            android.content.pm.PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return installed.firstInstallTime == installed.lastUpdateTime;
+        } catch (android.content.pm.PackageManager.NameNotFoundException missing) {
+            return false;
+        }
+    }
+
+    private void presentPendingSourceSetup() {
+        if (!sourceSetupPending || !hasWindowFocus() || isFinishing() || isDestroyed()
+                || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) return;
+        sourceSetupPending = false;
+        showInitialSourceSetup();
+    }
+
+    private void showInitialSourceSetup() {
+        if (sourceSetupSheet != null) return;
+        Sheet sheet = sheet("设置内容来源", "download");
+        sourceSetupSheet = sheet;
+        add(sheet.body, text("从公开仓库导入音乐、漫画、小说和动画源，并启用可用规则。", 14, MUTED, false), W, 5);
+        Map<InitialSourceSetup.Module, TextView> statuses = new EnumMap<>(InitialSourceSetup.Module.class);
+        for (InitialSourceSetup.Module module : InitialSourceSetup.Module.values()) {
+            LinearLayout item = row();
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            item.addView(text(module.label, 14, FG, true), size(62, W));
+            TextView status = text("", 13, MUTED, false);
+            item.addView(status, weight(0, W));
+            statuses.put(module, status);
+            add(sheet.body, item, W, 10);
+        }
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        add(sheet.body, progress, 4, 11);
+        TextView begin = action("", true, () -> {
+            if (sourceSetup.working()) return;
+            if (sourceSetup.started() && !sourceSetup.needsRetry()) sheet.dialog.dismiss();
+            else sourceSetup.start();
+        });
+        add(sheet.body, begin, 48, 13);
+        TextView later = action("", false, sheet.dialog::dismiss);
+        add(sheet.body, later, 44, 5);
+
+        boolean[] wasWorking = {sourceSetup.working()};
+        Runnable render = () -> {
+            statuses.forEach((module, status) -> status.setText(sourceSetup.message(module)));
+            boolean working = sourceSetup.working();
+            boolean complete = sourceSetup.started() && !sourceSetup.needsRetry();
+            progress.setVisibility(working ? View.VISIBLE : View.GONE);
+            begin.setText(working ? "正在聚合…" : !sourceSetup.started() ? "一键聚合并启用"
+                    : complete ? "完成" : "重试未完成项");
+            begin.setEnabled(!working);
+            begin.setAlpha(working ? .5f : 1f);
+            later.setText(sourceSetup.started() ? "关闭" : "稍后");
+            later.setVisibility(working || complete ? View.GONE : View.VISIBLE);
+            sheet.dialog.setCancelable(!working);
+            if (wasWorking[0] && !working) {
+                readers[COMICS].onSelected();
+                readers[NOVELS].onSelected();
+                musicOnline.renderSources();
+                if (anime != null) anime.onSelected();
+            }
+            wasWorking[0] = working;
+        };
+        sheet.dialog.setOnDismissListener(dialog -> {
+            sourceSetup.listen(null);
+            sourceSetupSheet = null;
+            main.post(this::presentPendingAppUpdate);
+        });
+        appSettings.edit().putBoolean("source_setup_seen", true).apply();
+        sourceSetup.listen(render);
+        render.run();
+        sheet.show();
     }
 
     private void showGuide() {

@@ -23,10 +23,12 @@ final class AppUpdates {
     private static final String MANIFEST = "update.json";
     private static final String LATEST_MANIFEST_PATH = "/releases/latest/download/" + MANIFEST;
     private static final String RELEASE_ASSET_PATH = "/releases/download/";
+    private static final String GITEE_WEB = "https://gitee.com/";
     private static final Pattern REPOSITORY = Pattern.compile(
             "[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}");
     private static final Pattern VERSION = Pattern.compile("[0-9]{1,9}(?:\\.[0-9]{1,9}){2}");
     private static final Pattern SHA256 = Pattern.compile("[a-fA-F0-9]{64}");
+    private enum Channel { GITHUB, GITEE, MIRROR }
 
     interface Fetch {
         Response get(URI address, int limit, boolean asset) throws IOException;
@@ -46,12 +48,13 @@ final class AppUpdates {
         URI websiteUrl() {
             String url = apkUrl.toString();
             int releasePath = url.indexOf(RELEASE_ASSET_PATH);
-            if (releasePath < 0 || !"github.com".equalsIgnoreCase(apkUrl.getHost())) return apkUrl;
+            if (releasePath < 0 || (!githubHost(apkUrl) && !giteeHost(apkUrl))) return apkUrl;
             return URI.create(url.substring(0, releasePath) + "/releases/tag/v" + versionName);
         }
     }
 
     private final String repository;
+    private final String giteeRepository;
     private final URI mirrorBase;
     private final Fetch fetch;
 
@@ -68,18 +71,30 @@ final class AppUpdates {
     }
 
     AppUpdates(String repository, String mirror, Fetch fetch) {
+        this(repository, mirror, "", fetch);
+    }
+
+    AppUpdates(String repository, String mirror, String giteeRepository) {
+        this(repository, mirror, giteeRepository, AppUpdates::request);
+    }
+
+    AppUpdates(String repository, String mirror, String giteeRepository, Fetch fetch) {
         this.repository = repository;
+        this.giteeRepository = giteeRepository;
         this.mirrorBase = mirrorDirectory(mirror);
         this.fetch = fetch;
     }
 
     boolean configured() {
-        return githubConfigured() || mirrorBase != null;
+        return githubConfigured() || validRepository(giteeRepository) || mirrorBase != null;
     }
 
     private boolean githubConfigured() {
-        return REPOSITORY.matcher(repository).matches()
-                && !repository.endsWith("/.") && !repository.endsWith("/..");
+        return validRepository(repository);
+    }
+
+    private static boolean validRepository(String value) {
+        return REPOSITORY.matcher(value).matches() && !value.endsWith("/.") && !value.endsWith("/..");
     }
 
     private static URI mirrorDirectory(String mirror) {
@@ -87,7 +102,7 @@ final class AppUpdates {
         try {
             URI address = URI.create(mirror);
             String path = address.getRawPath();
-            if (trustedHttps(address) && !githubHost(address) && address.getRawQuery() == null
+            if (trustedHttps(address) && !githubHost(address) && !giteeHost(address) && address.getRawQuery() == null
                     && path.matches("/(?:[A-Za-z0-9._~-]+/)*") && address.equals(address.normalize())) {
                 return address;
             }
@@ -98,23 +113,88 @@ final class AppUpdates {
     }
 
     Release latest() throws IOException {
+        return latest(0);
+    }
+
+    Release latest(int installedVersionCode) throws IOException {
         if (!configured()) throw new IOException("当前安装包未设置更新仓库");
-        IOException githubFailure = null;
-        if (githubConfigured()) {
+        Release available = null;
+        IOException failure = null;
+        if (validRepository(giteeRepository)) {
             try {
-                Release github = latestGithub();
-                if (github != null) return github;
+                available = latestGitee();
+                if (available != null && available.newerThan(installedVersionCode)) return available;
             } catch (IOException unavailable) {
-                if (mirrorBase == null || Thread.currentThread().isInterrupted()) throw unavailable;
-                githubFailure = unavailable;
+                if (Thread.currentThread().isInterrupted()) throw unavailable;
+                failure = unavailable;
             }
         }
         if (mirrorBase != null) {
-            Response response = fetch.get(mirrorBase.resolve(MANIFEST), MANIFEST_LIMIT, true);
-            if (response != null) return parseManifest(response.body(), null, "", true, 0);
+            try {
+                Response response = fetch.get(mirrorBase.resolve(MANIFEST), MANIFEST_LIMIT, true);
+                if (response != null) {
+                    Release mirror = parseManifest(response.body(), null, "", Channel.MIRROR, 0);
+                    if (mirror.newerThan(installedVersionCode)) return mirror;
+                    if (available == null || mirror.newerThan(available.versionCode())) available = mirror;
+                }
+            } catch (IOException unavailable) {
+                if (Thread.currentThread().isInterrupted()) throw unavailable;
+                failure = unavailable;
+            }
         }
-        if (githubFailure != null) throw githubFailure;
+        if (githubConfigured()) {
+            try {
+                Release github = latestGithub();
+                if (github != null && (available == null || github.newerThan(available.versionCode()))) return github;
+            } catch (IOException unavailable) {
+                if (Thread.currentThread().isInterrupted()) throw unavailable;
+                failure = unavailable;
+            }
+        }
+        if (available != null) return available;
+        if (failure != null) throw failure;
         return null;
+    }
+
+    private Release latestGitee() throws IOException {
+        String api = GITEE_WEB + "api/v5/repos/" + giteeRepository + "/releases";
+        Response latest = fetch.get(URI.create(api + "/latest"), RELEASE_LIMIT, false);
+        if (latest == null) return null;
+        try {
+            JSONObject release = new JSONObject(latest.body());
+            if (!release.optBoolean("draft") && !release.optBoolean("prerelease")) return giteeManifest(release);
+            Response recent = fetch.get(URI.create(api + "?direction=desc&per_page=8"), RELEASE_LIMIT, false);
+            if (recent == null) return null;
+            JSONArray releases = new JSONArray(recent.body());
+            for (int i = 0; i < Math.min(releases.length(), 8); i++) {
+                JSONObject candidate = releases.getJSONObject(i);
+                if (candidate.optBoolean("draft") || candidate.optBoolean("prerelease")) continue;
+                Release stable = giteeManifest(candidate);
+                if (stable != null) return stable;
+            }
+            return null;
+        } catch (JSONException malformed) {
+            throw invalidRelease();
+        }
+    }
+
+    private Release giteeManifest(JSONObject release) throws IOException, JSONException {
+        String tag = release.getString("tag_name");
+        if (!tag.startsWith("v") || !VERSION.matcher(tag.substring(1)).matches()) return null;
+        String version = tag.substring(1);
+        JSONArray assets = release.getJSONArray("assets");
+        if (asset(assets, MANIFEST) == null || asset(assets, apkName(version)) == null) return null;
+        Response manifest = fetch.get(giteeAsset(tag, MANIFEST), MANIFEST_LIMIT, true);
+        if (manifest == null) throw invalidRelease();
+        return parseManifest(manifest.body(), version, "", Channel.GITEE, 0);
+    }
+
+    private URI giteeAsset(String tag, String filename) {
+        return URI.create(GITEE_WEB + giteeRepository + RELEASE_ASSET_PATH + tag + "/" + filename);
+    }
+
+    private static String apkName(String version) {
+        return "anon-toolkyo-" + version + ".apk";
     }
 
     private Release latestGithub() throws IOException {
@@ -136,7 +216,7 @@ final class AppUpdates {
             JSONObject manifestAsset = asset(assets, MANIFEST);
             if (manifestAsset == null) return null;
             String versionName = tag.substring(1);
-            String apkName = "anon-toolkyo-" + versionName + ".apk";
+            String apkName = apkName(versionName);
             JSONObject apkAsset = asset(assets, apkName);
             if (apkAsset == null) throw invalidRelease();
 
@@ -154,14 +234,14 @@ final class AppUpdates {
         if (manifestAssetId > 0) {
             try {
                 Response response = fetch.get(githubAssetApi(manifestAssetId), MANIFEST_LIMIT, true);
-                if (response != null) return parseManifest(response.body(), version, digest, false, apkAssetId);
+                if (response != null) return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId);
             } catch (IOException unavailable) {
                 if (Thread.currentThread().isInterrupted()) throw unavailable;
             }
         }
         Response response = fetch.get(browserUrl, MANIFEST_LIMIT, true);
         if (response == null) throw invalidRelease();
-        return parseManifest(response.body(), version, digest, false, apkAssetId);
+        return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId);
     }
 
     private URI githubAssetApi(long assetId) {
@@ -172,11 +252,11 @@ final class AppUpdates {
         URI address = URI.create("https://github.com/" + repository + LATEST_MANIFEST_PATH);
         Response response = fetch.get(address, MANIFEST_LIMIT, true);
         if (response == null) return null;
-        return parseManifest(response.body(), response.versionFromRedirect(), "", false, 0);
+        return parseManifest(response.body(), response.versionFromRedirect(), "", Channel.GITHUB, 0);
     }
 
     private Release parseManifest(String body, String expectedVersion, String registeredDigest,
-                                  boolean mirror, long githubAssetId) throws IOException {
+                                  Channel channel, long githubAssetId) throws IOException {
         try {
             JSONObject descriptor = new JSONObject(body);
             Object number = descriptor.get("versionCode");
@@ -187,13 +267,19 @@ final class AppUpdates {
                 throw invalidRelease();
             }
             String tag = "v" + versionName;
-            String filename = "anon-toolkyo-" + versionName + ".apk";
+            String filename = apkName(versionName);
             URI mirrorApk = mirrorBase == null ? null : mirrorBase.resolve(tag + "/" + filename);
             String declaredUrl = descriptor.getString("apkUrl");
             URI apk;
-            if (mirror) {
+            if (channel == Channel.MIRROR) {
                 if (!mirrorApk.toString().equals(declaredUrl)) throw invalidRelease();
                 apk = mirrorApk;
+            } else if (channel == Channel.GITEE) {
+                apk = giteeAsset(tag, filename);
+                if (!apk.toString().equals(declaredUrl)) {
+                    if (!githubConfigured()) throw invalidRelease();
+                    assetUrl(declaredUrl, tag, filename);
+                }
             } else {
                 apk = assetUrl(declaredUrl, tag, filename);
             }
@@ -208,9 +294,9 @@ final class AppUpdates {
             List<URI> routes = new ArrayList<>();
             if (githubAssetId > 0) routes.add(githubAssetApi(githubAssetId));
             routes.add(apk);
-            if (mirror && githubConfigured()) {
+            if (channel != Channel.GITHUB && githubConfigured()) {
                 routes.add(URI.create("https://github.com/" + repository + RELEASE_ASSET_PATH + tag + "/" + filename));
-            } else if (mirrorApk != null) {
+            } else if (channel == Channel.GITHUB && mirrorApk != null) {
                 routes.add(mirrorApk);
             }
             return new Release(versionCode, versionName, apk, notes, sha256.toLowerCase(Locale.ROOT), routes);
@@ -247,10 +333,11 @@ final class AppUpdates {
         for (int redirects = 0; redirects <= 2; redirects++) {
             HttpURLConnection connection = (HttpURLConnection) current.toURL().openConnection();
             connection.setInstanceFollowRedirects(false);
+            connection.setUseCaches(false);
             connection.setConnectTimeout(remainingMillis(deadline));
             connection.setReadTimeout(remainingMillis(deadline));
             connection.setRequestProperty("User-Agent", "anon-toolkyo/" + BuildConfig.VERSION_NAME);
-            String accept = asset ? "application/json" : "application/vnd.github+json";
+            String accept = asset || giteeHost(address) ? "application/json" : "application/vnd.github+json";
             if (asset && "api.github.com".equalsIgnoreCase(address.getHost())) accept = "application/octet-stream";
             connection.setRequestProperty("Accept", accept);
             try {
@@ -258,8 +345,11 @@ final class AppUpdates {
                 if (status == HttpURLConnection.HTTP_NOT_FOUND) return null;
                 if (asset && (status == 301 || status == 302 || status == 303 || status == 307 || status == 308)) {
                     String location = connection.getHeaderField("Location");
-                    if (!githubHost(address)) throw invalidRelease();
-                    if (redirects == 0 && address.getRawPath().endsWith(LATEST_MANIFEST_PATH)) {
+                    if (giteeHost(address)) {
+                        current = giteeAssetRedirect(address, current, location);
+                    } else if (!githubHost(address)) {
+                        throw invalidRelease();
+                    } else if (redirects == 0 && address.getRawPath().endsWith(LATEST_MANIFEST_PATH)) {
                         ManifestRedirect redirect = latestManifestRedirect(address, location);
                         current = redirect.url();
                         manifestVersion = redirect.version();
@@ -336,9 +426,36 @@ final class AppUpdates {
     }
 
     static URI apkRedirect(URI initialAddress, URI currentAddress, String location) throws IOException {
+        if (giteeHost(initialAddress)) return giteeAssetRedirect(initialAddress, currentAddress, location);
         if (!trustedHttps(initialAddress) || !githubHost(initialAddress)) throw invalidRelease();
         if (!initialAddress.equals(currentAddress)) releaseAssetRedirect(currentAddress.toString());
         return releaseAssetRedirect(location);
+    }
+
+    private static URI giteeAssetRedirect(URI initial, URI current, String location) throws IOException {
+        String path = initial.getRawPath();
+        int split = path.indexOf(RELEASE_ASSET_PATH);
+        if (!trustedHttps(initial) || initial.getRawQuery() != null || split < 1
+                || !validRepository(path.substring(1, split))) throw invalidRelease();
+        String prefix = path.substring(0, split) + "/attach_files/";
+        String filename = path.substring(path.lastIndexOf('/') + 1);
+        URI target = current.resolve(redirectUri(location));
+        if (!trustedHttps(target)) throw invalidRelease();
+        String targetPath = target.getRawPath();
+        if (initial.equals(current) && giteeHost(target) && target.getRawQuery() == null
+                && targetPath.startsWith(prefix) && targetPath.substring(prefix.length())
+                        .matches("[0-9]+/download/" + Pattern.quote(filename))) return target;
+        String currentPath = current.getRawPath();
+        boolean fromAttachment = giteeHost(current) && currentPath.startsWith(prefix)
+                && currentPath.substring(prefix.length()).matches("[0-9]+/download/" + Pattern.quote(filename));
+        if ((initial.equals(current) || fromAttachment) && "foruda.gitee.com".equalsIgnoreCase(target.getHost())
+                && targetPath.matches("/attach_file/[0-9]+/[A-Za-z0-9._-]+")
+                && filename.equalsIgnoreCase(targetPath.substring(targetPath.lastIndexOf('/') + 1))) return target;
+        throw invalidRelease();
+    }
+
+    private static boolean giteeHost(URI address) {
+        return "gitee.com".equalsIgnoreCase(address.getHost());
     }
 
     private static boolean githubHost(URI address) {

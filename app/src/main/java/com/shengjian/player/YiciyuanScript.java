@@ -217,11 +217,13 @@ final class YiciyuanScript {
         private int characters, requests, responseCharacters;
         private long networkTime;
         private String library;
+        private String sourceVariable;
 
         LegadoScope(ReaderSources.Source source, String query, int page) {
             this.source = source;
             this.query = query;
             this.page = page;
+            this.sourceVariable = source.definition.optString("sourceVariable", "");
         }
 
         String library() {
@@ -241,6 +243,11 @@ final class YiciyuanScript {
         }
 
         String get(String key) { return values.getOrDefault(key, ""); }
+
+        void setSourceVariable(String value) throws IOException {
+            if (value.length() > 192_000) throw new IOException("来源脚本变量过长");
+            sourceVariable = value;
+        }
 
         void beginRow() {
             if (rowDefaults == null) {
@@ -293,7 +300,13 @@ final class YiciyuanScript {
                 ScriptableObject.READONLY | ScriptableObject.PERMANENT);
         function(scope, source, "getKey", args -> state.source.url);
         function(scope, source, "getTag", args -> state.source.name);
-        function(scope, source, "getVariable", args -> state.source.definition.optString("sourceVariable", ""));
+        function(scope, source, "getVariable", args -> state.sourceVariable);
+        function(scope, source, "setVariable", args -> {
+            String value = args.length == 0 || args[0] == null || args[0] == Undefined.instance
+                    ? "" : argument(args, 0);
+            state.setSourceVariable(value);
+            return Undefined.instance;
+        });
         ScriptableObject.putProperty(scope, "source", source);
         if (lookup != null) {
             Scriptable book = context.newObject(scope);

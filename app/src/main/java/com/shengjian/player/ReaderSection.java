@@ -4448,9 +4448,22 @@ final class ReaderSection {
             cover = new ImageSlot(true, true);
             FrameLayout artwork = new FrameLayout(host);
             artwork.addView(cover, new FrameLayout.LayoutParams(M, W));
-            shelfMenu = iconButton("more", "书架操作", () -> {
+            View.OnClickListener openMenu = view -> {
                 if (cell != null) cell.onLongClick.run();
-            });
+            };
+            if (manga) {
+                FrameLayout touchTarget = new FrameLayout(host);
+                Icon dots = new Icon(host, "more", 0xffffffff, 18);
+                dots.setBackground(button(host, 0xbf252126, 8, 0));
+                dots.setDuplicateParentStateEnabled(true);
+                touchTarget.addView(dots, new FrameLayout.LayoutParams(dp(24), dp(24),
+                        Gravity.TOP | Gravity.END));
+                touchTarget.setFocusable(true);
+                touchTarget.setOnClickListener(openMenu);
+                shelfMenu = touchTarget;
+            } else {
+                shelfMenu = iconButton("more", "书架操作", openMenu);
+            }
             FrameLayout.LayoutParams menuPlacement = new FrameLayout.LayoutParams(dp(44), dp(44),
                     Gravity.TOP | Gravity.END);
             menuPlacement.topMargin = dp(4);

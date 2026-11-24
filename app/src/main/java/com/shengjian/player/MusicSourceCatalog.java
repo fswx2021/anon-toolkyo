@@ -102,6 +102,8 @@ final class MusicSourceCatalog {
 
     record ImportResult(int added, int updated, int unchanged, int skipped) {}
 
+    record AggregationResult(ImportResult imported, int failed, int repositories) {}
+
     private MusicSourceCatalog() {}
 
     static final class Store {
@@ -163,6 +165,42 @@ final class MusicSourceCatalog {
         synchronized List<String> repositories() { return new ArrayList<>(subscriptions); }
 
         String loadIssue() { return loadFailure == null ? "" : "音乐源清单读取失败，原文件已保留"; }
+
+        AggregationResult aggregate() throws IOException {
+            List<String> targets = new ArrayList<>();
+            targets.add("");
+            targets.addAll(repositories());
+            int added = 0, updated = 0, unchanged = 0, skipped = 0, failed = 0;
+            for (String address : targets) {
+                if (Thread.currentThread().isInterrupted()) throw new IOException("已取消更新");
+                try {
+                    ImportResult imported = merge(address.isEmpty() ? official() : fetch(address));
+                    added += imported.added();
+                    updated += imported.updated();
+                    unchanged += imported.unchanged();
+                    skipped += imported.skipped();
+                } catch (IOException invalid) { failed++; }
+            }
+            return new AggregationResult(new ImportResult(added, updated, unchanged, skipped),
+                    failed, targets.size());
+        }
+
+        synchronized int enableSearchable(boolean navidromeConfigured) throws IOException {
+            requireWritable();
+            Map<String, Source> next = new LinkedHashMap<>(items);
+            int enabled = 0;
+            boolean changed = false;
+            for (Source source : items.values()) {
+                if (!source.searchable() || source.adapter() == Adapter.NAVIDROME && !navidromeConfigured) continue;
+                enabled++;
+                if (!source.enabled()) {
+                    next.put(source.id(), source.withEnabled(true));
+                    changed = true;
+                }
+            }
+            if (changed) save(next, subscriptions);
+            return enabled;
+        }
 
         synchronized ImportResult merge(Batch batch) throws IOException {
             requireWritable();

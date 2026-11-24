@@ -21,6 +21,8 @@ final class ReaderSearchFlowVerification {
         server.createContext("/two", exchange -> reply(exchange, "乙"));
         server.createContext("/search", exchange -> reply(exchange,
                 exchange.getRequestURI().getRawQuery().startsWith("page=2&") ? "乙" : "甲"));
+        server.createContext("/manga", exchange -> mangaSearch(exchange,
+                "q=missing".equals(exchange.getRequestURI().getRawQuery())));
         server.start();
         try {
             ReaderSources sources = new ReaderSources(store.toFile(), null);
@@ -40,11 +42,43 @@ final class ReaderSearchFlowVerification {
                     && ReaderEngine.search(a, "测试", 2).get(0).title.equals("乙")
                     && ReaderEngine.explore(a, explore, 2).get(0).title.equals("乙"), "actual search and discovery page 2");
             verifyGroupingAndChapters(a, b);
+            verifyMangaSearch(sources, address);
             System.out.println("PASS search and discovery pagination, work identity and alternate chapter matching");
             verifyNovelText();
         } finally {
             server.stop(0);
         }
+    }
+
+    private static void verifyMangaSearch(ReaderSources sources, String address) throws Exception {
+        JSONObject rules = new JSONObject().put("bookList", ".common-comic-item")
+                .put("name", ".comic__title@text").put("bookUrl", "a.1@href")
+                .put("author", "@js:source.getVariable()");
+        JSONObject definition = new JSONObject().put("bookSourceType", ReaderSources.COMIC)
+                .put("bookSourceName", "漫画搜索验证").put("bookSourceUrl", address + "/comic")
+                .put("searchUrl", "@js:eval(String(source.bookSourceComment)); "
+                        + "'/manga?q=' + key;")
+                .put("bookSourceComment", "if (source.getVariable() === '') source.setVariable(key);")
+                .put("ruleSearch", rules);
+        ReaderSources.Source manga = sources.importText(definition.toString(), ReaderSources.COMIC).sources.get(0);
+        require(ReaderEngine.search(manga, "missing", 1).isEmpty(),
+                "a page with zero manga hits and recommendation cards must be considered an empty result");
+        ReaderEngine.Book book = ReaderEngine.search(manga, "found", 1).get(0);
+        require(book.url.equals(address + "/207622/") && book.title.equals("妖神记") && book.author.equals("found"),
+                "a real manga result must remain available and a source variable must follow the current request");
+    }
+
+    private static void mangaSearch(HttpExchange exchange, boolean missing) throws IOException {
+        String heading = missing ? "很遗憾，您搜索的内容暂时没有找到，我们为您推荐了以下漫画~" : "搜索结果（1）";
+        String link = missing ? "#" : "/207622/";
+        byte[] body = ("<body class='p-search'><div class='search-page-wr' data-count='"
+                + (missing ? 0 : 1) + "'><div class='search-comic-list'><div class='search_head'>"
+                + heading + "</div><div class='common-comic-item'><a href='/207622/'></a>"
+                + "<p class='comic__title'><a href='" + link + "'>妖神记</a></p></div></div></div></body>")
+                .getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+        exchange.sendResponseHeaders(200, body.length);
+        try (exchange) { exchange.getResponseBody().write(body); }
     }
 
     private static void verifyNovelText() {

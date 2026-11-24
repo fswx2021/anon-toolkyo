@@ -160,7 +160,7 @@ final class AnimeSection {
 
     AnimeSection(MainActivity host) {
         this.host = host;
-        sources = new AnimeSource.Store(new File(host.getFilesDir(), "anime-sources.json"));
+        sources = host.animeSourceStore();
         library = new AnimeLibrary(host);
         popularCache = new AtomicFile(new File(host.getCacheDir(), "bangumi-popular-v1.json"));
         artwork = new AnimeCoverCache(host, main);
@@ -412,7 +412,8 @@ final class AnimeSection {
     private void refreshDashboard() {
         if (recentWatching == null) return;
         android.content.SharedPreferences summary = host.getSharedPreferences("anime_feature_summary", Activity.MODE_PRIVATE);
-        ruleShortcut.setVisibility(summary.getInt("ruleCount", 0) == 0 ? View.VISIBLE : View.GONE);
+        boolean needsSources = summary.getInt("ruleCount", 0) == 0 && !sources.awaitingInitialImport();
+        ruleShortcut.setVisibility(needsSources ? View.VISIBLE : View.GONE);
         String title = summary.getString("latestTitle", "");
         recentWatching.setVisibility(title.isEmpty() ? View.GONE : View.VISIBLE);
         if (!title.isEmpty()) {

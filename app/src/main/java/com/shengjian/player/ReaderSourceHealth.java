@@ -4,6 +4,9 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.net.UnknownHostException;
+import java.security.cert.CertPathValidatorException;
+import java.security.cert.CertificateException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -14,6 +17,8 @@ final class ReaderSourceHealth {
     private static final long COOLDOWN = TimeUnit.MINUTES.toMillis(30);
     private static final int MAX_ENTRIES = 8000;
     private static final int BROKEN_RULE = -1;
+    private static final int UNRESOLVED_DOMAIN = -2;
+    private static final int INVALID_CERTIFICATE = -3;
     private final Map<String, Outcome> history = new LinkedHashMap<>();
 
     ReaderSourceHealth(String json) {
@@ -45,7 +50,7 @@ final class ReaderSourceHealth {
     boolean record(ReaderSources.Source source, boolean found, Exception failure, long now) {
         Outcome previous = recent(source, now);
         int rank = failure == null ? (found ? 2 : 1) : -1;
-        int hardFailure = failure == null ? 0 : hardFailure(failure);
+        int hardFailure = failure == null ? 0 : hardFailure(failure, source.kind);
         int streak = hardFailure == 0 ? 0 : 1;
         if (streak > 0 && previous != null && previous.hardFailure == hardFailure) {
             streak = Math.min(2, previous.streak + 1);
@@ -78,7 +83,7 @@ final class ReaderSourceHealth {
         return outcome;
     }
 
-    private static int hardFailure(Exception failure) {
+    private static int hardFailure(Exception failure, int kind) {
         Throwable cause = failure;
         for (int depth = 0; cause != null && depth < 8; depth++, cause = cause.getCause()) {
             if (cause instanceof ReaderSources.HttpFailure) {
@@ -86,6 +91,12 @@ final class ReaderSourceHealth {
                 return status == 404 || status == 410 || status == 401 || status == 403 ? status : 0;
             }
             if (cause instanceof ReaderSources.RuleFailure) return BROKEN_RULE;
+            if (kind == ReaderSources.COMIC) {
+                if (cause instanceof UnknownHostException) return UNRESOLVED_DOMAIN;
+                if (cause instanceof CertificateException || cause instanceof CertPathValidatorException) {
+                    return INVALID_CERTIFICATE;
+                }
+            }
         }
         return 0;
     }

@@ -71,15 +71,21 @@ final class AnimeSource {
     final JSONObject searchApi, chapterApi;
     private final JSONObject definition;
     private final String repository;
+    private final boolean startupEnabled;
 
     private AnimeSource(JSONObject rule, boolean enabled) throws IOException {
         this(rule, enabled, "");
     }
 
     private AnimeSource(JSONObject rule, boolean enabled, String repository) throws IOException {
+        this(rule, enabled, repository, false);
+    }
+
+    private AnimeSource(JSONObject rule, boolean enabled, String repository, boolean startupEnabled) throws IOException {
         this.enabled = enabled;
         definition = rule;
         this.repository = repository;
+        this.startupEnabled = startupEnabled;
         name = field(rule, "name");
         if (name.isEmpty() || name.length() > 80 || name.chars().anyMatch(Character::isISOControl)) {
             throw new IOException("规则名称须为 1 到 80 个字符");
@@ -199,7 +205,7 @@ final class AnimeSource {
                     JSONObject row = rows.optJSONObject(i);
                     if (row == null || row.optJSONObject("rule") == null) throw new IOException("动画源清单损坏");
                     AnimeSource item = new AnimeSource(row.optJSONObject("rule"), row.optBoolean("enabled", true),
-                            field(row, "repository"));
+                            field(row, "repository"), row.optBoolean("startupEnabled"));
                     loaded.put(item.id, item);
                 }
                 items = loaded;
@@ -209,6 +215,11 @@ final class AnimeSource {
         }
 
         synchronized List<AnimeSource> list() { return new ArrayList<>(items.values()); }
+
+        synchronized boolean awaitingInitialImport() {
+            return !new File(file.getParentFile(), "anon-initial-anime-rules.json").isFile()
+                    && items.values().stream().anyMatch(source -> source.enabled && source.startupEnabled);
+        }
 
         synchronized byte[] exportRules() throws IOException {
             if (loadFailure != null) throw new IOException("动画源清单读取失败", loadFailure);
@@ -276,6 +287,11 @@ final class AnimeSource {
                     web(OFFICIAL_ARCHIVE), "kazumi-official", progress);
         }
 
+        AggregationResult aggregateAndEnableOfficial(Consumer<String> progress) throws IOException {
+            return aggregateKnownRepository(web(OFFICIAL_REPOSITORY), web(OFFICIAL_MIRROR),
+                    web(OFFICIAL_ARCHIVE), "kazumi-official", progress, true);
+        }
+
         AggregationResult aggregateRepository(String address, Consumer<String> progress) throws IOException {
             URI index = repositoryIndex(address);
             if (OFFICIAL_REPOSITORY.equals(index.toASCIIString())) return aggregateOfficial(progress);
@@ -287,6 +303,12 @@ final class AnimeSource {
 
         AggregationResult aggregateKnownRepository(URI primary, URI mirror, URI archive, String identity,
                                                    Consumer<String> progress) throws IOException {
+            return aggregateKnownRepository(primary, mirror, archive, identity, progress, false);
+        }
+
+        private AggregationResult aggregateKnownRepository(URI primary, URI mirror, URI archive, String identity,
+                                                           Consumer<String> progress, boolean enableForStartup)
+                throws IOException {
             Consumer<String> updates = progress == null ? ignored -> {} : progress;
             boolean pinned = "kazumi-official".equals(identity);
             try (ReaderSearchQueue queue = new ReaderSearchQueue(REPOSITORY_WORKERS, PER_RULE_TIMEOUT_MILLIS)) {
@@ -326,7 +348,7 @@ final class AnimeSource {
                 if (mirrored) downloaded.note("从 Kazumi 官方镜像读取规则目录");
                 checkImportCancellation();
                 updates.accept("正在合并已读取的动画源…");
-                ImportResult merged = apply(downloaded.toImportBatch(), identity, true);
+                ImportResult merged = apply(downloaded.toImportBatch(), identity, true, enableForStartup);
                 return new AggregationResult(downloaded, merged);
             }
         }
@@ -336,7 +358,7 @@ final class AnimeSource {
             AnimeSource item = items.get(id);
             if (item == null || item.enabled == enabled) return;
             Map<String, AnimeSource> next = new LinkedHashMap<>(items);
-            next.put(id, new AnimeSource(item.definition, enabled, item.repository));
+            next.put(id, new AnimeSource(item.definition, enabled, item.repository, item.startupEnabled));
             save(next);
         }
 
@@ -349,10 +371,11 @@ final class AnimeSource {
         }
 
         private synchronized ImportResult apply(ImportBatch batch) throws IOException {
-            return apply(batch, "", false);
+            return apply(batch, "", false, false);
         }
 
-        private synchronized ImportResult apply(ImportBatch batch, String repository, boolean allowEmpty) throws IOException {
+        private synchronized ImportResult apply(ImportBatch batch, String repository, boolean allowEmpty,
+                                                boolean enableForStartup) throws IOException {
             requireWritable();
             if (!allowEmpty && batch.valid.isEmpty()) throw new IOException(batch.diagnostics.isEmpty() ? "没有找到可导入的动画源"
                     : "没有找到可导入的动画源。" + batch.diagnostics.get(0));
@@ -372,11 +395,21 @@ final class AnimeSource {
                 } else if (old.repository.equals(repository) && old.definition.toString().equals(proposed.definition.toString())) {
                     batch.skipped++;
                 } else {
-                    next.put(proposed.id, new AnimeSource(proposed.definition, old.enabled, repository));
+                    next.put(proposed.id, new AnimeSource(proposed.definition, old.enabled, repository, old.startupEnabled));
                     updated++;
                 }
             }
-            if (added != 0 || updated != 0) save(next);
+            boolean startupChanged = false;
+            if (enableForStartup) {
+                for (Map.Entry<String, AnimeSource> entry : next.entrySet()) {
+                    AnimeSource source = entry.getValue();
+                    if (!source.enabled || !source.startupEnabled) {
+                        entry.setValue(new AnimeSource(source.definition, true, source.repository, true));
+                        startupChanged = true;
+                    }
+                }
+            }
+            if (added != 0 || updated != 0 || startupChanged) save(next);
             return new ImportResult(added, updated, batch.skipped, batch.diagnostics);
         }
 
@@ -391,6 +424,7 @@ final class AnimeSource {
                 for (AnimeSource source : next.values()) {
                     JSONObject row = new JSONObject().put("enabled", source.enabled).put("rule", source.definition);
                     if (!source.repository.isEmpty()) row.put("repository", source.repository);
+                    if (source.startupEnabled) row.put("startupEnabled", true);
                     rows.put(row);
                 }
                 bytes = rows.toString().getBytes(StandardCharsets.UTF_8);

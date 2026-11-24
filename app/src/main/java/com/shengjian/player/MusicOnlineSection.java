@@ -32,7 +32,6 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -91,13 +90,13 @@ final class MusicOnlineSection implements AutoCloseable {
 
     MusicOnlineSection(Activity host, Consumer<MusicOnlineEngine.Song> onPlay,
                        Consumer<MusicOnlineEngine.Song> onDownload, FrameLayout page,
-                       BiConsumer<ImageView, String> loadArtwork) {
+                       BiConsumer<ImageView, String> loadArtwork, MusicSourceCatalog.Store catalog) {
         this.host = host;
         this.onPlay = onPlay;
         this.onDownload = onDownload;
         this.page = page;
         this.loadArtwork = loadArtwork;
-        catalog = new MusicSourceCatalog.Store(new File(host.getFilesDir(), "music-sources.json"));
+        this.catalog = catalog;
     }
 
     View searchBox() {
@@ -518,26 +517,11 @@ final class MusicOnlineSection implements AutoCloseable {
     }
 
     private void aggregate() {
-        List<String> repositories = catalog.repositories();
         runWork("正在更新 MusicFree 清单和已订阅的仓库…", () -> {
-            int added = 0, updated = 0, unchanged = 0, skipped = 0, failed = 0;
-            ArrayList<String> targets = new ArrayList<>();
-            targets.add("");
-            targets.addAll(repositories);
-            for (String address : targets) {
-                if (Thread.currentThread().isInterrupted()) throw new IOException("已取消更新");
-                try {
-                    MusicSourceCatalog.ImportResult imported = catalog.merge(address.isEmpty()
-                            ? MusicSourceCatalog.official() : MusicSourceCatalog.fetch(address));
-                    added += imported.added();
-                    updated += imported.updated();
-                    unchanged += imported.unchanged();
-                    skipped += imported.skipped();
-                } catch (IOException invalid) { failed++; }
-            }
-            if (failed == targets.size()) throw new IOException("所有订阅都更新失败，请检查网络或订阅链接");
-            String counts = importSummary(new MusicSourceCatalog.ImportResult(added, updated, unchanged, skipped));
-            return failed == 0 ? counts : counts + " · " + failed + " 个仓库失败";
+            MusicSourceCatalog.AggregationResult result = catalog.aggregate();
+            if (result.failed() == result.repositories()) throw new IOException("所有订阅都更新失败，请检查网络或订阅链接");
+            String counts = importSummary(result.imported());
+            return result.failed() == 0 ? counts : counts + " · " + result.failed() + " 个仓库失败";
         });
     }
 
@@ -594,7 +578,7 @@ final class MusicOnlineSection implements AutoCloseable {
         });
     }
 
-    private void renderSources() {
+    void renderSources() {
         if (sourceScreen == null) return;
         List<MusicSourceCatalog.Source> sources = catalog.sources();
         sources.sort(Comparator.comparing(MusicSourceCatalog.Source::searchable).reversed()

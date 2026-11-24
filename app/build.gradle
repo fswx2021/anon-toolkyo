@@ -7,9 +7,13 @@ plugins {
 def danDanPlayAppId = providers.environmentVariable('ANON_TOOL_DANDANPLAY_APP_ID').getOrElse('').trim()
 def danDanPlayAppSecret = providers.environmentVariable('ANON_TOOL_DANDANPLAY_APP_SECRET').getOrElse('').trim()
 def updateGithubRepository = providers.environmentVariable('ANON_TOOL_GITHUB_REPOSITORY').getOrElse('').trim()
+def updateGiteeRepository = providers.environmentVariable('ANON_TOOL_GITEE_REPOSITORY').getOrElse('').trim()
 def updateMirrorBase = providers.environmentVariable('ANON_TOOL_UPDATE_MIRROR_BASE').getOrElse('').trim()
 if (!updateGithubRepository.isEmpty() && !(updateGithubRepository ==~ '[A-Za-z0-9-]+/[A-Za-z0-9_.-]+')) {
     throw new GradleException('ANON_TOOL_GITHUB_REPOSITORY must use the owner/repository format.')
+}
+if (!updateGiteeRepository.isEmpty() && !(updateGiteeRepository ==~ '[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}')) {
+    throw new GradleException('ANON_TOOL_GITEE_REPOSITORY must use the owner/repository format.')
 }
 def releaseKeystore = providers.environmentVariable('ANON_TOOL_RELEASE_KEYSTORE').getOrElse('')
 def releaseStorePassword = providers.environmentVariable('ANON_TOOL_RELEASE_STORE_PASSWORD').getOrElse('')
@@ -47,9 +51,10 @@ android {
         applicationId 'com.shengjian.player'
         minSdk 26
         targetSdk 35
-        versionCode 66
-        versionName '0.30.2'
+        versionCode 69
+        versionName '0.30.5'
         buildConfigField 'String', 'UPDATE_GITHUB_REPOSITORY', groovy.json.JsonOutput.toJson(updateGithubRepository)
+        buildConfigField 'String', 'UPDATE_GITEE_REPOSITORY', groovy.json.JsonOutput.toJson(updateGiteeRepository)
         buildConfigField 'String', 'UPDATE_MIRROR_BASE', groovy.json.JsonOutput.toJson(updateMirrorBase)
         buildConfigField 'String', 'DANDANPLAY_APP_ID', groovy.json.JsonOutput.toJson(danDanPlayAppId)
         buildConfigField 'String', 'DANDANPLAY_APP_SECRET', groovy.json.JsonOutput.toJson(danDanPlayAppSecret)

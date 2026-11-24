@@ -50,13 +50,14 @@ def mirror_base(value):
     return value
 
 
-def build_environment(repository, mirror):
+def build_environment(repository, mirror, gitee_repository):
     env = os.environ.copy()
     for name in ("DANDANPLAY_APP_ID", "DANDANPLAY_APP_SECRET", "DANDANAPI_APPID",
                  "DANDANAPI_KEY", "KAZUMI_APPID", "KAZUMI_KEY", "ORG_GRADLE_PROJECT_dart-defines",
                  "GH_TOKEN", "GITHUB_TOKEN"):
         env.pop(name, None)
     env["ANON_TOOL_GITHUB_REPOSITORY"] = repository
+    env["ANON_TOOL_GITEE_REPOSITORY"] = gitee_repository
     env["ANON_TOOL_UPDATE_MIRROR_BASE"] = mirror
     env.setdefault("CI", "true")
     env.setdefault("FLUTTER_SUPPRESS_ANALYTICS", "true")
@@ -258,6 +259,8 @@ def assemble_mirror(directory, tag, apk_name, mirror):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", default=os.environ.get("ANON_TOOL_GITHUB_REPOSITORY"), help="GitHub OWNER/REPO")
+    parser.add_argument("--gitee-repository", default=os.environ.get("ANON_TOOL_GITEE_REPOSITORY", ""),
+                        help="optional public Gitee OWNER/REPO for domestic updates")
     parser.add_argument("--mirror-base", default=os.environ.get("ANON_TOOL_UPDATE_MIRROR_BASE", ""),
                         help="optional owner-controlled HTTPS update directory ending in /")
     parser.add_argument("--notes-file", type=Path, help="UTF-8 release notes, default tools/releases/<version>.md")
@@ -276,6 +279,10 @@ def main():
     repo = re.fullmatch(REPOSITORY, repository)
     if not repo or len(repo[1]) > 39 or len(repo[2]) > 100 or repo[2] in {".", ".."}:
         parser.error("set --repository OWNER/REPO or ANON_TOOL_GITHUB_REPOSITORY")
+    gitee_repository = args.gitee_repository.strip()
+    gitee = re.fullmatch(REPOSITORY, gitee_repository)
+    if gitee_repository and (not gitee or len(gitee[1]) > 39 or len(gitee[2]) > 100 or gitee[2] in {".", ".."}):
+        parser.error("--gitee-repository must use the owner/repository format")
     if args.minimum_tests < 1:
         parser.error("--minimum-tests must be greater than zero")
     if args.previous and not args.previous.is_file():
@@ -287,7 +294,7 @@ def main():
     if not notes or len(notes.encode("utf-16-le")) > 4000:
         parser.error("--notes-file must contain 1 to 2000 UTF-16 code units")
     github = check_draft_source(repository, f"v{version}") if args.create_draft else None
-    env = build_environment(repository, mirror)
+    env = build_environment(repository, mirror, gitee_repository)
     tools = build_tools(args.build_tools, env)
     cached_gradle = find_cached_gradle(env) if args.use_cache else args.cached_gradle
     apk = args.apk.resolve() if args.apk else build(env, cached_gradle, args.minimum_tests)

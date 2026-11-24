@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_modular/flutter_modular.dart';
+import 'package:kazumi/anon/anime_startup_rules.dart';
 import 'package:kazumi/anon/feature_bridge.dart';
 import 'package:kazumi/anon/feature_request.dart';
 import 'package:kazumi/anon/feature_services.dart';
@@ -29,6 +30,8 @@ class _AnimeFeatureHostState extends State<AnimeFeatureHost>
   AnimeFeatureRequest? _pending;
   bool _servicesReady = false;
   final _stack = AnimeFeatureStack();
+  final _startupRules = AnimeStartupRules();
+  int _openRevision = 0;
   Object? _error;
   Timer? _publishTimer;
   ReactionDisposer? _ruleWatch;
@@ -115,6 +118,9 @@ class _AnimeFeatureHostState extends State<AnimeFeatureHost>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(MeteredNetworkService.refresh());
+      if (_servicesReady) {
+        unawaited(_startupRules.sync(inject<PluginsController>()));
+      }
       _scheduleDashboard();
     }
   }
@@ -138,7 +144,10 @@ class _AnimeFeatureHostState extends State<AnimeFeatureHost>
   }
 
   Future<void> _open(AnimeFeatureRequest request) async {
+    final revision = ++_openRevision;
     try {
+      await _startupRules.sync(inject<PluginsController>());
+      if (!mounted || revision != _openRevision) return;
       if (_error != null) setState(() => _error = null);
       await _stack.open(
         context,
