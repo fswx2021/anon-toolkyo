@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable-nodpi/anon_mascot.png" alt="anon toolkyo 唱片插图" width="104">
+  <img src="app/src/main/res/drawable-nodpi/anon_avatar.jpg" alt="anon toolkyo 应用图标" width="104">
 </p>
 
 <h1 align="center">anon toolkyo</h1>
