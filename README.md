@@ -1,173 +1,40 @@
-# anon toolkyo
+<p align="center">
+  <img src="app/src/main/res/drawable-nodpi/anon_mascot.png" alt="anon toolkyo 唱片插图" width="104">
+</p>
 
-Android 应用，包含音乐、漫画、小说和动画。四个栏目共用 ANON 首页和底部导航，动画栏目复用 Kazumi 的播放、Bangumi、弹幕和规则能力。
+<h1 align="center">anon toolkyo</h1>
 
-## 项目状态
+<p align="center">在 Android 上听音乐、看漫画、读小说、追番。</p>
 
-正式版安装包和更新说明发布在 [GitHub Releases](https://github.com/fswx2021/anon-toolkyo/releases)。
+<p align="center">
+  <a href="https://gitee.com/fswx2021/anon-toolkyo-updates/releases"><strong>Gitee 下载</strong></a>
+  · <a href="https://github.com/fswx2021/anon-toolkyo/releases/latest"><strong>GitHub 下载</strong></a>
+  · <a href="docs/guide.md">使用指南</a>
+</p>
 
-## 安装与使用
+## 功能
 
-1. 从 [GitHub Releases](https://github.com/fswx2021/anon-toolkyo/releases/latest) 下载正式版的 `anon-toolkyo-版本号.apk`，在手机上打开安装。同一签名的旧版可以直接覆盖安装，保留已有曲库、书架、阅读进度和音效设置。
-2. 在「音乐 → 导入 → 导入文件」可批量选择音频、视频，以及与它们同名的歌词文件。也可以从文件管理器分享音视频到「anon toolkyo」。
-3. 在 B 站复制公开视频、音频或公开合集链接，在「导入 → 导入链接」粘贴。可多选视频的分 P 或合集条目，选择时请单独粘贴一个合集链接。也支持批量粘贴媒体直链，导入时可看进度并取消。
-4. 点曲目开始播放。点「歌词」进入同步歌词页。若曲目没有歌词，可在该页添加，也可从曲库的「⋯」更换歌词文件。
+| 栏目 | 功能 |
+| --- | --- |
+| [音乐](docs/guide.md#音乐) | 导入音视频、搜索在线音源，支持同步歌词、音效和歌单。 |
+| [漫画](docs/guide.md#漫画与小说) | 导入本地漫画或图源，支持长条、双页和离线章节。 |
+| [小说](docs/guide.md#漫画与小说) | 导入 TXT、EPUB 或书源，支持排版、翻页和语音朗读。 |
+| [动画](docs/guide.md#动画) | 浏览热门番剧、追番和续播，支持弹幕、分集评论和下载。 |
 
-底部导航有「音乐」「漫画」「小说」「动画」四个入口。迷你播放器只在音乐栏目显示。切到漫画、小说或动画首页时，正在听的音乐可以继续在后台播放，回到音乐栏目即可继续控制。
+四个栏目都能查看历史记录和上次打开的时间。书架、进度和本地内容可按需备份。
 
-四个栏目首页都有「历史」入口，显示播放、阅读或观看次数和最近一次的时间。音乐按最近播放顺序显示曲目，漫画和小说可接着上次的章节和位置阅读，动画可以续播已看剧集。旧历史缺少的统计会标为未记录，后续新增次数照常累计。各栏目可单独管理历史记录。
+## 快速开始
 
-首页使用白底、灰色辅助区和红色选中状态，音乐操作区和四栏底部导航使用 Jetpack Compose。首页头像和桌面图标使用项目维护者提供的 Q 版头像，空状态和播放器占位图使用本项目的原创图形。小说和漫画的书架可在封面网格与详细列表之间切换。
+1. 需要 **Android 8.0 或更高版本**。从任一发布页下载 **anon-toolkyo-版本号.apk** 后安装。同一签名的旧版可覆盖安装。
+2. 首次安装且来源尚未设置时，可用「一键聚合并启用」设置四个栏目的来源。也可以稍后从设置打开，或在各栏目单独导入。
+3. 更新入口在「设置 → 关于与数据 → 检查更新」。应用优先检查 Gitee，必要时回退到 GitHub。
 
-文件导入后保存在应用内，可以离线播放。B 站视频有独立音轨时优先保存该音轨，HLS 需要联网。其他平台可分享实际文件或粘贴媒体直链，普通分享网页需要对应平台的解析支持。
+## 文档与反馈
 
-曲库可浏览收藏、最近播放和自建歌单，曲目菜单可编辑歌名和歌手。在筛选列表或歌单开始播放会生成对应队列。队列可指定下一首、调序和移除；播放页还支持倍速和定时停止。
+- [使用指南](docs/guide.md)涵盖导入、播放、阅读和备份。
+- [开发指南](docs/development.md)涵盖源码结构、构建、发布和 Windows 源规则调试器。
+- 遇到问题可在 [GitHub Issues](https://github.com/fswx2021/anon-toolkyo/issues) 提交，并附上应用版本和复现步骤。
 
-在音乐播放页拖动进度条可预览目标时间和对应歌词。手动浏览歌词后，点「回到当前歌词」可跟回正在唱的一句，点带时间轴的歌词可直接跳转。播放队列打开时会定位到当前曲目。
+## 许可与致谢
 
-首页右上角「设置」包含外观、默认启动页、下载与存储、备份与恢复、快速上手和关于与数据。轻量 ZIP 备份包含索引、设置、进度及歌词等资料。完整备份还包括音乐文件、本地作品和离线章节。恢复流程先通过系统文件选择器验证备份，选择退出后重新打开应用即可应用恢复。 [Android 文件选择器](https://developer.android.com/training/data-storage/shared/documents-files)
-
-正式版启动时会检查更新，发现新版时显示更新说明。可在设置关闭启动检查，也可点「设置 → 关于与数据 → 检查更新」。选择「应用内下载并安装」可以查看进度，校验后的 APK 由 Android 确认安装。首次使用时，Android 可能要求允许此应用安装未知来源应用。「去网站下载」也可打开 GitHub 发布页。首次使用应用内安装，请先安装 0.30.0 或更新版。
-
-在「设置 → 帮助 → 开源声明」可访问项目网站、发布页和项目许可证。页底「致谢」收录第三方项目、上游源码和可离线查看的许可证。Kazumi 集成所用的版本、修改和构建脚本在工程的 `integration/kazumi/`。
-
-音频由 Android 系统解码。常见格式包括 MP3、AAC、M4A、WAV、FLAC、OGG，以及含兼容音轨的 MP4、MKV 和 WebM。实际支持与手机的系统版本和编码格式有关。歌词支持 LRC、SRT、VTT、TXT，以及部分 MP3 和 FLAC 内嵌歌词。带时间轴的歌词会高亮滚动，点一句可跳转。
-
-## 在线音乐
-
-在音乐页输入歌名或歌手。已启用的音源同时搜索，返回的结果会按相关性排序。点击歌曲即可在内置播放器试听，曲目会留在曲库中，方便收藏或加入歌单。
-
-搜索结果右侧的「下载」和播放页歌名旁的下载按钮都可将支持下载的曲目存入本地曲库，在曲库筛选「本地文件」即可找到，进度窗口可取消下载。已添加到曲库的在线曲目下载后会保留原有的收藏、歌单和历史记录。只提供在线播放或需要下载权限的曲目会显示具体原因。
-
-「音源管理」支持一键聚合 MusicFree 作者清单，也可导入订阅链接、本地 JSON 或 JS 插件信息。默认可搜索 B 站公开内容、Audius 公开曲目、Internet Archive 中标明 Creative Commons 许可的音频，以及猫耳FM 免费内容。猫耳FM 受播放保护的条目可从曲目选项打开原站。配置 Navidrome（OpenSubsonic）后可搜索自己的曲库，服务端有歌词时会自动读取。Audius 曲目在歌名、歌手和时长匹配时可从 LRCLIB 读取同步歌词。服务器登录信息保存在本机。 [MusicFree 插件清单](https://github.com/maotoumao/MusicFreePlugins/blob/master/plugins.json) · [Audius API](https://docs.audius.co/api/) · [Internet Archive 元数据 API](https://archive.org/developers/md-read.html) · [LRCLIB API](https://lrclib.net/docs)
-
-## 漫画与小说
-
-1. 打开「漫画」或「小说」页，点「管理漫画源」或「管理书源」。
-2. 点「一键聚合」，应用会读取已接入的公开目录和合集，把兼容规则合并到当前栏目。新增来源会自动启用。同一栏目内会按名称和地址去重，旧版已导入的同名来源统一显示一条，书架作品仍可使用各自原有的来源规则。旧版已收录的来源可在管理页点「全部启用」。
-3. 也可选择文件、粘贴规则或填写链接。预览会列出漫画源和小说源的数量，以及新增、更新和跳过原因。确认后，混合来源会归入对应栏目。支持 JSON、GZIP 和异次元压缩合集，也可直接选「阅读」备份 ZIP 导入其中的书源。
-4. 小说和漫画每次搜索最多同时查询 48 个普通来源和 2 个声明需要网页渲染的来源。同一站点每次搜索最多同时查询两个来源。进度显示实际查询中、排队、有结果、无匹配、失败和暂缓的数量。近期有结果的来源优先查询，连续遇到相同入口错误或规则错误的来源暂缓 30 分钟。点「继续搜索」可立即查暂缓来源，点「重试失败」会保留已有结果并延长单源时限。「来源详情」可查看逐源原因。打开作品即可查看目录、收藏或继续阅读。目录支持按章节名或序号查找，点「刷新」可以更新目录。
-
-普通来源首次查询的时限为 10 秒。遇到符合条件的 GET 超时或连接中断时，应用可自动补查一次，最多追加 4 秒。每个来源仍与其他站点并发查询。
-
-搜索结果在同一个列表里按相关性排列，书名和作者精确匹配的作品优先，相关性低的作品排在后面。支持书名与作者的组合查询。Android 10 及以上设备支持在结果匹配时统一比较繁简字形。
-
-搜索结果按作品名归并。同一名称只显示一条，标出命中的来源数。点作品可在下方选择来源并查看各条目的作者，正在返回的结果会继续补进选源列表。名称带有版本或卷名的作品分别显示。有分页规则的搜索和发现可以继续加载。作品目录和阅读菜单可换源，优先按章节名匹配，也可确认编号或手动选章。换源后的新来源从目标章节开头开始，原来源的阅读位置和书签仍可用。
-
-「来源详情」会分别标明书名或链接提取失败、请求参数格式有误和跨站辅助请求受限等情况。
-
-漫画聚合读取异次元单图源目录、近期图源合集及阅读 3.0 的漫画规则；小说聚合读取源仓库近期书源合集和公开发布的 Legado 规则。已成功读取的结果会在部分仓库超时或失败时一并保存。两栏合计最多存储 8,000 条、32 MiB 规则。书站能否搜索、打开目录和正文，以实际访问结果为准。[异次元图源目录](https://www.yckceo.com/yiciyuan/tuyuan/index.html) · [阅读书源合集](https://www.yckceo.com/yuedu/shuyuans/index.html) · [AOAOSTAR](https://legado.aoaostar.com/) · [LuAnMuC](https://github.com/luanmuc/legado-book-sources)
-
-阅读时点屏幕中间可收起或唤出控件。底部进度条可跳到当前章节的任意页或正文位置。右上角菜单可以添加书签、缓存本章和调整全屏或亮屏选项。回到作品目录后，点「书签」或「离线章节」可以跳转、删除已保存的记录。
-
-- **漫画**可按作品选择从右向左翻页、从左向右翻页或纵向长条。支持双击、双指缩放、相邻页预加载和单页重试，纵向进度保存到页内位置。 [Mihon 阅读器设置](https://mihon.app/docs/guides/reader-settings)
-- **小说**可在滚动和左右翻页之间切换，支持可选的音量键翻页。提供夜读、米白、护眼和白纸主题，可调整字体、字号、行距、字距和边距，换排版后保留正文位置。 [阅读 3.0 项目](https://github.com/gedoor/legado)
-- **离线章节**会保存在应用内。漫画缓存本章的所有图片，小说缓存正文。缓存完成后，可从书架进入作品，打开「离线章节」。
-
-阅读时轻点中央可收放工具栏。小说正文和漫画画面保持原有布局，拖动章内进度后可以撤销跳转。末页继续翻页，或在滚动和长条模式下滑到章末后继续上滑，都会进入下一章。从章首往回翻会接到上一章末尾。漫画的阅读方向、双页和缩放选项集中在阅读设置中。
-
-书架可按收藏、已读和本地作品筛选和排序，支持自定义分组和手动检查收藏更新。点作品的「⋯ → 从书架移除」可整理书架，保留阅读进度、历史、书签及离线内容。「管理 → 已移出书架」可以把作品放回书架。小说支持导入 TXT、EPUB 正文，漫画支持 CBZ、ZIP 或图片目录。可在目录批量加入下载，通过各自的下载页查看进度、取消、重试和删除。下载完成的章节在来源移除或目录暂不可用时也可从「离线下载」打开。小说菜单提供章内查找、系统语音朗读和按作品设置的正文清理。漫画可选择适应整页、适应宽度、裁切页边空白，横向翻页在宽屏窗口下可启用双页。
-
-可点「试读示例」体验离线原创漫画《唱针落下的夜晚》或短篇小说《潮汐电台》。漫画示例使用异次元规则。网络漫画和小说需要自行导入来源。
-
-**异次元图源**可在「漫画 → 管理漫画源 → 浏览图源仓库」选取。回到「从链接」粘贴某个图源或合集的详情页，也可直接粘贴其 JSON 下载地址。支持单个 JSON 对象、图源数组和仓库压缩合集，以及常见的 CSS、JSONPath、分页变量、图片请求头、旧导出的转义脚本和部分 JavaScript 规则。聚合时会跳过可明确识别的加密目录或图片规则。旧版已收录的这类来源会显示具体原因。 [异次元图源仓库](https://www.yckceo.com/yiciyuan/tuyuan/index.html)
-
-**阅读 3.0 书源**中小说使用 `bookSourceType: 0`，漫画使用 `bookSourceType: 2`。可导入 JSON 或 `legado://import/bookSource?src=…` 链接。支持 CSS、简单 XPath、JSONPath、DOM 区间与排除索引、正则捕获组、GET/POST、部分脚本生成地址和分页模板。支持内联 `jsLib`、常见的脚本变量和编码函数，以及范围受限的同源辅助请求。普通 HTTP 请求按来源和网站保存临时会话。Android 可用 WebView 渲染 GET 页面和部分同步页面脚本。浏览器 POST、登录和部分阅读专用脚本接口仍需来源作者提供兼容规则。 [阅读官方发布](https://github.com/LegadoTeam/legado/releases/tag/3.26101819) · [规则解析实现](https://github.com/LegadoTeam/legado/blob/3.26101819/app/src/main/java/io/legado/app/model/analyzeRule/AnalyzeRule.kt)
-
-在来源管理里打开单个来源的菜单，点「检查来源」。用该来源已收录的作品名测试搜索、目录与正文。漫画还会尝试下载和解码首图，帮助区分规则解析失败与图片请求失败。
-
-「批量体检」可在多个来源上复核搜索、目录和首章。来源管理可按检查状态筛选、导出 TSV 诊断表，并在手动勾选确认后停用失败来源。
-
-## 动画
-
-点底部「动画」即可在 ANON 中浏览热门番剧、搜索片名、以图搜番，或打开排行、放送日历、追番、记录和下载。点海报进入对应的 Bangumi 条目。进入单项功能后，按返回键逐级回到原来的列表或动画首页。规则仓库、同步和动画设置也从这个栏目进入。首次使用可到「规则仓库」点「一键聚合」。番剧详情、分集评论、播放器、弹幕和离线下载等共享同一套动画数据。播放、图片、弹幕和评论依赖各自的数据服务。[复用的 Kazumi 2.4.5 源码](https://github.com/Predidit/Kazumi/tree/dedb7136318a509d7f412794b2531cf725034f00)
-
-0.28.0 沿用 0.27.0 的动画资料库，追番、历史和已安装规则共用原有记录。更早版本的兼容规则和带有 Bangumi 编号的追番会在首次进入动画功能页时尝试迁移。按来源网址保存的旧记录可从「设置 → 旧版动画资料」打开，旧规则也可在这里导出。ANON 的全局备份涵盖旧版资料，当前动画收藏和观看记录可在「动画 → 同步」管理。
-
-发行构建缺少弹弹play签名凭证时，动画按片名和集数从 uosc_danmaku 社区服务获取弹幕。Bangumi 带鉴权的请求使用官方接口；作品和评论的可达性取决于所选网络路由。下载通知返回动画下载页。
-
-### 旧版动画资料
-
-在「动画 → 管理动画源 → 一键聚合」可从 Kazumi 的默认社区规则仓库批量导入。应用优先读取整包发布目录，也可回退到 GitHub 逐条读取和 Kazumi 配置的 GitCode 镜像。页面显示读取进度，以及新增、更新、保留、跳过和失败的数量。重复聚合按规则标识去重，已有来源的启停设置会保留。导入后，作品搜索和播放取决于对应来源站点的可用性。 [Kazumi 规则仓库](https://github.com/Predidit/KazumiRules)
-
-来源管理也支持选择本地 Kazumi JSON、粘贴规则、打开 `kazumi://` 分享链接，或输入规则网址与仓库索引。支持常见的 XPath、JSON API 和混合搜索、选集规则。导入后可启用或停用来源，搜索时可停止或重试失败的来源。 [Kazumi 规则文档](https://kazumi.app/docs/rules/introduce-rules/)
-
-动画首页会展示热门番剧。首次打开时可离线显示作品名和占位封面，联网加载成功后会更新榜单及封面。在线封面优先读取 Bangumi 原始图片，使用磁盘缓存，并可回退至 Kazumi 使用的图片服务。点封面可查看作品简介并搜索已启用的动画源，点「查看全部」可浏览榜单。日历读取 Bangumi 一周放送信息，评分排行可单独查看。作品页可切换播放线路和剧集，追番可设为想看、在看、看过、搁置或弃番。首次使用可点「试播」播放内置离线动画片段。 [Kazumi 榜单接口](https://github.com/Predidit/Kazumi/blob/4ca04009fdae696883629e0984e7d7134cc7ed84/lib/request/apis/bangumi_api.dart) · [Bangumi 动画频道](https://bangumi.tv/anime)
-
-媒体直链默认使用 Android 系统解码。ARM64 和 x86-64 设备可从「更多 → 播放内核」切换到 mpv，或在「Anime4K 超分辨率」选效率、画质。超分通过 mpv 对直连视频实时处理，效果和速度取决于设备 GPU 和视频分辨率。播放器打开失败时，支持 mpv 的设备会尝试切换一次内核。网页来源会在后台识别媒体地址，并在内置播放器中播放。识别失败时可重试、切换线路，或手动选择网页播放。 [mpv 手册](https://mpv.io/manual/stable/) · [Anime4K 项目](https://github.com/bloc97/Anime4K)
-
-竖屏播放时，视频下方可查看本集讨论和 Bangumi 分集信息。评论和回复显示头像、正文及日期，回复可展开。ARM64 安卓设备使用 Kazumi 2.4.4 同款 `ech_http 0.2.4` 网络组件访问 Bangumi 评论和图片；常规 HTTPS 和 Bangumi 公开讨论页也可使用。原生库与 Kazumi 2.4.4 安卓发行包中的 ARM64 库一致，许可见应用资产中的 `licenses/ech_http`。 [Kazumi ECH 路由](https://github.com/Predidit/Kazumi/blob/4ca04009fdae696883629e0984e7d7134cc7ed84/lib/request/core/ech_transport.dart) · [ech_http 源码](https://github.com/ech-research/ech_http)
-
-横屏时，上下控件贴全屏边缘，半透明底色渐隐，按钮避开摄像头和系统触控区。画面比例的「自动」选项保留原比例，「裁切填充」可等比铺满。点画面显隐控件，双击播放或暂停，横滑调整进度。横屏底栏可控制播放、弹幕、倍速和选集，点击右上角可打开更多设置。选集面板也可切换当前来源提供的播放线路。右侧可截图和锁定控件，锁定后轻点画面显示解锁按钮。左侧上下滑调亮度，右侧上下滑调音量，长按画面临时以 2 倍速播放。播放选项还提供字幕轨道（视频和内核支持时）、定时关闭和外部播放器。单文件视频直链可交给系统下载，在动画首页「下载」查看。动画来源、追番、进度和设置随本地备份保存。 [Kazumi 播放器布局](https://github.com/Predidit/Kazumi/blob/4ca04009fdae696883629e0984e7d7134cc7ed84/lib/pages/player/player_item_panel.dart)
-
-播放时点画面底部的「弹」，可一键开关弹幕，状态会记住。开启后，应用按当前作品和集数自动匹配，默认走兼容弹弹play的 uosc_danmaku 社区服务，安装后即可使用。可在「播放选项 → 弹幕设置 → 手动匹配弹幕」换作品或集数，匹配成功后会记住该作品用的片名。也可筛选哔哩哔哩、巴哈姆特动画疯、弹弹play和其他来源，具体覆盖由服务端的关联数据决定。 [uosc_danmaku 服务说明](https://github.com/Tony15246/uosc_danmaku#弹幕解析服务相关)
-
-已有弹弹play开放平台凭证时，可在「弹幕设置 → 弹弹play 接入设置」切换到直连。在直连模式，由 Bangumi 日历选入且片名一致的作品优先用 Bangumi 条目匹配。自行构建时可通过环境变量 `ANON_TOOL_DANDANPLAY_APP_ID` 和 `ANON_TOOL_DANDANPLAY_APP_SECRET` 配置获批的应用凭证。 [弹弹play开放平台](https://doc.dandanplay.com/open/)
-
-「弹幕设置 → 导入本地弹幕 XML」支持免凭证导入哔哩哔哩格式的文件。滚动、顶部、底部弹幕随播放进度、暂停和倍速同步。网页播放模式需要能读取网页视频的时间轴。
-
-「弹幕设置」也可调整显示范围、字号和透明度，按类型显示弹幕、合并短时间内的重复弹幕，以及按关键词屏蔽。设置同时用于在线弹幕和本地 XML。
-
-## Windows 源规则调试器
-
-把 `打开源规则调试器.cmd` 和 `shengjian-reader-workbench.jar` 放在同一个文件夹。电脑环境需要 Java 17 或更高版本。双击启动脚本，就可以导入来源并逐步验证作品搜索、目录、小说正文和漫画图片。点击「载入示例」可以离线体验。PC 调试器的来源清单保存在用户目录下的 `.shengjian/workbench/sources.json`。
-
-PC 和 Android 从同一套 Java 源码编译导入器与阅读引擎。可以在项目根目录重建 PC JAR，或运行离线验证。
-
-```powershell
-.\desktop\build.ps1
-java -cp shengjian-reader-workbench.jar com.shengjian.player.ReaderVerification
-.\desktop\verify-android-regex.ps1
-```
-
-最后一条命令使用 Windows 系统 ICU 检查来源规则、音乐链接和歌词解析的静态正则，能发现桌面 Java 与 Android 正则解析行为的差异。
-
-## 音质增强
-
-在播放页右上角点「音效」，播放中可实时试听。所有调音只作用于 anon toolkyo 的播放会话，调节值会保存。
-
-- **预设**可选清晰人声、低频增强、夜间聆听或自定义。「原声」会关闭应用音效，同时保留调节值，方便来回对比。
-- **均衡器**可在八个频段中逐段调整 ±6 dB。手动调节可与预设叠加，也可在自定义模式下单独使用。
-- **高级**可独立调节低频力度、动态平衡和耳机声场。支持完整动态处理时，播放器用多段压缩与峰值限制控制响度差。基础均衡模式只处理频率，面板会提示当前状态。耳机声场需要 Android 9 或以上版本，并使用支持该音效的耳机输出。
-
-面板里的「系统声音设置」可打开手机的声音设置。如果你的机型提供杜比全景声或 OReality Audio，可在系统中调节。应用内置音效参考了酷狗蝰蛇的调音方式，使用 Android 音频效果接口实现。[酷狗蝰蛇调音指南](https://ksyx.kugou.com/guide.html) · [一加 12 音效规格](https://www.oneplus.com/cn/12/specs) · [一加 13 音效规格](https://www.oneplus.com/cn/13/specs)
-
-## 系统媒体控件
-
-播放使用 Android 媒体会话和标准媒体通知，向系统提供歌曲、封面、进度及播放控制。通知栏、锁屏和状态栏胶囊的具体样式由设备系统决定。 [Android 媒体控件](https://developer.android.com/media/implement/surfaces/mobile) · [小米媒体通知规范](https://dev.mi.com/xiaomihyperos/documentation/detail?pId=2161)
-
-## 构建
-
-完整 Android 包使用 Flutter 3.50.1、Git、Python 3、JDK 和 Android SDK。构建使用 Kazumi 2.4.5 固定提交中的功能代码，应用 ANON 的页面和数据迁移补丁，以 `integration/kazumi/runtime/lib/anon_anime.dart` 注册单项动画功能。四个栏目的主界面位于 Android 宿主 `com.shengjian.player`。设置 `ANDROID_HOME` 和 `FLUTTER_ROOT`，或使用工作区 `build/android-sdk`、`build/flutter-sdk`。首次构建需要联网获取依赖。
-
-```powershell
-python integration/kazumi/build_android.py
-```
-
-在电脑上运行四栏导航、歌词、小说与漫画的 Android 控件回归可使用以下命令。测试使用 Robolectric。
-
-```powershell
-.\gradlew.bat :app:testReleaseUnitTest
-```
-
-## 发布新版
-
-在 `app/build.gradle` 提高 `versionCode` 并更新 `versionName`，将变更写入 `tools/releases/新版本.md`。使用上一版的正式 APK 作为验证基准，运行以下命令。它会构建并测试新版，校验包名、签名、版本和 APK，并在 `build/releases/v新版本/` 生成 APK、更新描述和 SHA-256 清单。
-
-```powershell
-python tools/release_android.py --repository fswx2021/anon-toolkyo --previous "上一版.apk" --notes-file "tools/releases/新版本.md"
-```
-
-这台 Windows 电脑可以加上 `--use-cache` 使用已有的离线构建环境。按上述目录命名更新说明时，工具会自动找到对应文件。
-
-打包时指定 `--gitee-repository 所有者/仓库` 可启用 Gitee 更新。在该公开仓库用同一个版本标签创建正式发行版，并上传与 GitHub 相同的 APK、`update.json` 和 `SHA256SUMS.txt`。应用优先从 Gitee 检查和下载新版，也可从 GitHub 检查更新。APK 仍使用同一签名。 [Gitee 创建发行版](https://help.gitee.com/repository/release/create)
-
-自有 HTTPS 镜像可在打包时指定 `--mirror-base https://你的域名/updates/`。先上传镜像输出目录中的版本路径，再更新镜像根目录的 `update.json`。镜像应通过该 HTTPS 地址直接返回文件。
-
-提交源码后，推送对应的 `v版本号` Git 标签。再次运行时传入 `--apk "build/releases/v新版本/anon-toolkyo-新版本.apk" --create-draft`，并保留上面的仓库、上一版和说明参数，即可用已登录的 Git Credential Manager 创建发布草稿。检查三个附件完整后发布为正式版。
-
-从既有安装覆盖升级须沿用原签名。此电脑目前使用与旧版一致的证书。使用单独维护的签名库时，在本机环境设置 `ANON_TOOL_RELEASE_KEYSTORE`、`ANON_TOOL_RELEASE_STORE_PASSWORD`、`ANON_TOOL_RELEASE_KEY_ALIAS` 和 `ANON_TOOL_RELEASE_KEY_PASSWORD`。签名库和密码应加密备份并与源码分开保存。
-
-## 开源许可
-
-项目代码使用 GPL-3.0-only。第三方组件及其资源适用各自的许可证，见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+项目代码采用 [GPL-3.0-only](LICENSE)。动画功能使用 Kazumi 的部分源码，第三方组件及素材适用各自的许可。 [第三方声明](THIRD_PARTY_NOTICES.md)
