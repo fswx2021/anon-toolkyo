@@ -16,6 +16,7 @@ import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.UnaryOperator;
@@ -44,6 +45,73 @@ public class ReaderSearchGroupingTest {
 
     @Test public void comicSearchGroupsTheSameTitleAndLetsTheReaderChooseItsSource() throws Exception {
         verifySourceChoice(true);
+    }
+
+    @Test public void comicPickerPrefersPpcatWhenOpenedAndKeepsExistingRowsDuringSearch() throws Exception {
+        var controller = Robolectric.buildActivity(Activity.class).setup();
+        Activity host = controller.get();
+        ReaderSection section = new ReaderSection(host, true, 42,
+                new ReaderCache(new File(host.getCacheDir(), "preferred-comic-cache")), () -> {});
+        CountDownLatch releasePreferred = new CountDownLatch(1);
+        try {
+            host.setContentView(section.view());
+            ReaderSources sources = (ReaderSources) field(section, "sources");
+            var imported = sources.importText(new JSONArray()
+                    .put(new JSONObject().put("bookSourceName", "原有图源")
+                            .put("bookSourceUrl", "https://legacy-reader.example")
+                            .put("bookSourceType", ReaderSources.COMIC)
+                            .put("searchUrl", "/search?q={{key}}"))
+                    .put(new JSONObject().put("format", "ppcat").put("bookSourceType", "漫画")
+                            .put("bookSourceName", "皮皮喵图源").put("bookSourceUrl", "https://ppcat-reader.example")
+                            .put("ruleSearchUrl", "/search?q={{key}}").put("ruleSearchList", ".comic")
+                            .put("ruleSearchName", ".title@text").put("ruleSearchNoteUrl", "a@href"))
+                    .toString(), ReaderSources.COMIC);
+            var installed = imported.sources;
+            assertEquals(imported.diagnostics.toString(), 2, installed.size());
+            var legacy = installed.get(0);
+            var preferred = installed.get(1);
+            assertTrue(preferred.ppcat());
+
+            var targets = new ArrayList<>(installed);
+            Method prioritize = ReaderSection.class.getDeclaredMethod("prioritizeSearchTargets",
+                    List.class, long.class);
+            prioritize.setAccessible(true);
+            prioritize.invoke(section, targets, System.currentTimeMillis());
+            assertEquals(List.of(preferred, legacy), targets);
+
+            search(section, targets, source -> {
+                if (source.ppcat() && !releasePreferred.await(8, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("preferred fixture was not released");
+                }
+                return List.of(book(source, "雾港来信", "林溪", "/comic"));
+            });
+            Object feed = field(section, "searchFeed");
+            ListView results = (ListView) field(feed, "results");
+            await("waiting for the legacy source's result", () -> results.getCount() == 1);
+            click(results, 0);
+            AlertDialog chooser = ShadowAlertDialog.getLatestAlertDialog();
+            ListView choices = findList(chooser.getWindow().getDecorView());
+            assertNotNull(choices);
+            assertEquals(1, choices.getCount());
+            assertTrue(rowText(choices, 0).contains(legacy.name));
+
+            releasePreferred.countDown();
+            await("waiting for the preferred source to appear", () -> choices.getCount() == 2);
+            assertTrue(rowText(choices, 0).contains(legacy.name));
+            assertTrue(rowText(choices, 1).contains(preferred.name));
+            chooser.dismiss();
+
+            click(results, 0);
+            ListView reopened = findList(ShadowAlertDialog.getLatestAlertDialog().getWindow().getDecorView());
+            assertNotNull(reopened);
+            assertEquals(2, reopened.getCount());
+            assertTrue(rowText(reopened, 0).contains(preferred.name));
+            assertTrue(rowText(reopened, 1).contains(legacy.name));
+        } finally {
+            releasePreferred.countDown();
+            section.destroy();
+            controller.pause().stop().destroy();
+        }
     }
 
     private void verifySourceChoice(boolean manga) throws Exception {
@@ -135,13 +203,22 @@ public class ReaderSearchGroupingTest {
 
     private static void search(ReaderSection section, List<ReaderSources.Source> sources,
                                Map<String, List<ReaderEngine.Book>> answers) throws Exception {
+        search(section, sources, source -> answers.get(source.id));
+    }
+
+    private interface SearchAnswer {
+        List<ReaderEngine.Book> books(ReaderSources.Source source) throws Exception;
+    }
+
+    private static void search(ReaderSection section, List<ReaderSources.Source> sources,
+                               SearchAnswer answer) throws Exception {
         Class<?> modeType = Class.forName(ReaderSection.class.getName() + "$SearchMode");
         Class<?> actionType = Class.forName(ReaderSection.class.getName() + "$SearchAction");
         Field modeField = modeType.getDeclaredField("SEARCH");
         modeField.setAccessible(true);
         Object mode = modeField.get(null);
         Object action = Proxy.newProxyInstance(actionType.getClassLoader(), new Class<?>[]{actionType},
-                (proxy, method, args) -> answers.get(((ReaderSources.Source) args[0]).id));
+                (proxy, method, args) -> answer.books((ReaderSources.Source) args[0]));
         Method search = ReaderSection.class.getDeclaredMethod("showResults", String.class, modeType,
                 List.class, actionType, List.class, Map.class, ReaderSearchRanking.class, String.class);
         search.setAccessible(true);

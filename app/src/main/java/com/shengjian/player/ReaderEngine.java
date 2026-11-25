@@ -139,15 +139,17 @@ final class ReaderEngine {
         final boolean yiciyuan;
         private final YiciyuanScript.LegadoScope scripting;
         private final YiciyuanScript.MangaVariables mangaVariables;
+        private final YiciyuanScript.PpcatContext ppcat;
         private long scriptTime;
         private int scriptCalls, variableDepth;
 
-        Data(ReaderSources.Source source, ReaderSources.Response response, YiciyuanScript.LegadoScope scripting)
-                throws IOException {
+        Data(ReaderSources.Source source, ReaderSources.Response response, YiciyuanScript.LegadoScope scripting,
+             YiciyuanScript.PpcatContext ppcat) throws IOException {
             url = response.url;
             raw = response.body;
             yiciyuan = yiciyuan(source);
             this.scripting = scripting;
+            this.ppcat = ppcat;
             mangaVariables = yiciyuan ? new YiciyuanScript.MangaVariables() : null;
             String body = response.body.trim();
             if (body.startsWith("\ufeff")) body = body.substring(1).trim();
@@ -174,6 +176,7 @@ final class ReaderEngine {
             long networkBefore = scripting == null ? 0 : scripting.networkTime();
             try {
                 if (yiciyuan) return YiciyuanScript.evaluateYiciyuan(rule, input, url, mangaVariables);
+                if (ppcat != null) return YiciyuanScript.evaluatePpcat(rule, input, url, null, 0, ppcat);
                 return scripting == null ? YiciyuanScript.evaluate(rule, input, url)
                         : YiciyuanScript.evaluateLegado(rule, input, url, scripting,
                                 selector -> scriptField(this, ruleRoot, selector));
@@ -302,7 +305,7 @@ final class ReaderEngine {
         String summaryRule = field(rules, "intro", "summary");
         String coverRule = field(rules, "coverUrl", "cover");
         String tocRule = field(rules, "tocUrl");
-        List<Object> rows = selectRows(data, data.root, list);
+        List<Object> rows = selectRows(data, ppcatRoot(data, rules), list);
         Map<String, Book> books = new LinkedHashMap<>();
         IOException entryFailure = null;
         for (Object row : rows) {
@@ -312,7 +315,7 @@ final class ReaderEngine {
             String bookUrl;
             try {
                 title = first(data, row, titleRule);
-                bookUrl = link(data.url, first(data, row, urlRule));
+                bookUrl = sourceLink(data, first(data, row, urlRule));
             } catch (IOException failed) {
                 checkSearchInterrupted(budget);
                 if (entryFailure == null) entryFailure = failed;
@@ -321,8 +324,8 @@ final class ReaderEngine {
             if (title.isEmpty() || bookUrl.isEmpty() || books.containsKey(bookUrl)) continue;
             Book book = new Book(source, title, optionalSearchField(data, row, authorRule, budget),
                     optionalSearchField(data, row, summaryRule, budget),
-                    link(data.url, optionalSearchField(data, row, coverRule, budget)), bookUrl,
-                    link(data.url, optionalSearchField(data, row, tocRule, budget)));
+                    sourceLink(data, optionalSearchField(data, row, coverRule, budget)), bookUrl,
+                    sourceLink(data, optionalSearchField(data, row, tocRule, budget)));
             books.put(bookUrl, book);
         }
         if (books.isEmpty() && !rows.isEmpty()) {
@@ -368,8 +371,8 @@ final class ReaderEngine {
                 && !new ReaderSearchRanking(expectedTitle, text -> text).exactTitle(title))) return null;
         return new Book(source, title, optionalSearchField(data, root, field(rules, "author"), budget),
                 optionalSearchField(data, root, field(rules, "intro", "summary"), budget),
-                link(data.url, optionalSearchField(data, root, field(rules, "coverUrl", "cover"), budget)),
-                data.url, link(data.url, optionalSearchField(data, root, field(rules, "tocUrl"), budget)));
+                sourceLink(data, optionalSearchField(data, root, field(rules, "coverUrl", "cover"), budget)),
+                data.url, sourceLink(data, optionalSearchField(data, root, field(rules, "tocUrl"), budget)));
     }
 
     private static void checkSearchResponse(Data data) throws ReaderSources.SiteFailure {
@@ -438,8 +441,8 @@ final class ReaderEngine {
                 or(first(data, root, field(rules, "name", "title")), book.title),
                 or(first(data, root, field(rules, "author")), book.author),
                 or(first(data, root, field(rules, "intro", "summary")), book.summary),
-                or(link(data.url, first(data, root, field(rules, "coverUrl", "cover"))), book.cover),
-                book.url, or(link(data.url, first(data, root, field(rules, "tocUrl"))), book.tocUrl));
+                or(sourceLink(data, first(data, root, field(rules, "coverUrl", "cover"))), book.cover),
+                book.url, or(sourceLink(data, first(data, root, field(rules, "tocUrl"))), book.tocUrl));
     }
 
     private static Object infoRoot(Data data, JSONObject rules) throws IOException {
@@ -449,13 +452,17 @@ final class ReaderEngine {
         return scopes.isEmpty() ? data.root : scopes.get(0);
     }
 
+    private static Object ppcatRoot(Data data, JSONObject rules) throws IOException {
+        return data.ppcat == null ? data.root : infoRoot(data, rules);
+    }
+
     static List<Chapter> chapters(Book book) throws IOException {
         ReaderSources.Source source = book.source;
         JSONObject info = section(source, "ruleBookInfo");
         JSONObject toc = section(source, "ruleToc");
         String listRule = field(toc, "chapterList");
         if (yiciyuan(source) && YiciyuanRules.isEncryptedRule(listRule)) {
-            throw new IOException("此异次元图源的章节目录规则已加密");
+            throw new IOException("此源的章节目录规则已加密");
         }
         if (listRule.isEmpty()) throw new IOException("此来源缺少目录规则");
         boolean reverse = listRule.startsWith("-");
@@ -464,7 +471,7 @@ final class ReaderEngine {
         Data data = null;
         if (!field(info, "tocUrl").isEmpty() && tocUrl.isEmpty()) {
             data = download(source, source.url, book.url, "", 1);
-            tocUrl = link(data.url, first(data, infoRoot(data, info), field(info, "tocUrl")));
+            tocUrl = sourceLink(data, first(data, infoRoot(data, info), field(info, "tocUrl")));
             if (!tocUrl.isEmpty() && !plainUrl(tocUrl).equals(data.url)) data = null;
         }
         if (tocUrl.isEmpty()) tocUrl = book.url;
@@ -476,7 +483,8 @@ final class ReaderEngine {
         for (int page = 1; page <= MAX_TOC_PAGES && !tocUrl.isEmpty(); page++) {
             if (data == null) data = download(source, source.url, tocUrl, "", page);
             if (!visited.add(data.url)) break;
-            for (Object group : selectRows(data, data.root, listRule)) {
+            Object root = ppcatRoot(data, toc);
+            for (Object group : selectRows(data, root, listRule)) {
                 List<Object> rows = childrenRule.isEmpty()
                         ? Collections.singletonList(group) : selectRows(data, group, childrenRule);
                 for (Object row : rows) {
@@ -485,13 +493,13 @@ final class ReaderEngine {
                     if (title.isEmpty() && data.yiciyuan) {
                         title = first(data, row, row instanceof JSONObject ? "$.name|$.title|$.text" : "text");
                     }
-                    String chapterUrl = link(data.url, first(data, row, field(toc, "chapterUrl", "url")));
+                    String chapterUrl = sourceLink(data, first(data, row, field(toc, "chapterUrl", "url")));
                     if (!title.isEmpty() && !chapterUrl.isEmpty()) {
                         found.putIfAbsent(chapterUrl, new Chapter(book, title, chapterUrl));
                     }
                 }
             }
-            tocUrl = nextLink(data, nextRule, visited, "");
+            tocUrl = nextLink(data, root, nextRule, visited, "");
             data = null;
         }
         if (found.isEmpty()) throw new IOException("目录没有解析到章节，请检查来源规则");
@@ -510,10 +518,10 @@ final class ReaderEngine {
         if (contentRule.isEmpty()) throw new IOException("此来源缺少正文或图片规则");
         boolean comic = source.kind == ReaderSources.COMIC;
         if (comic && yiciyuan(source) && YiciyuanRules.isEncryptedRule(contentRule)) {
-            throw new IOException("此异次元图源的图片提取规则已加密");
+            throw new IOException("此源的图片提取规则已加密");
         }
         if (comic && yiciyuan(source) && !field(rules, "imageDecoder").isEmpty()) {
-            throw new IOException("此异次元来源需要专用图片解码器，当前无法读取");
+            throw new IOException("此源需要专用图片解码器，当前无法读取");
         }
         String url = chapter.url;
         String firstUrl = "";
@@ -524,9 +532,10 @@ final class ReaderEngine {
             Data data = download(source, source.url, url, "", page);
             if (!visited.add(data.url)) break;
             if (firstUrl.isEmpty()) firstUrl = data.url;
-            for (Object part : select(data, data.root, contentRule)) {
+            Object root = ppcatRoot(data, rules);
+            for (Object part : select(data, root, contentRule)) {
                 if (comic) {
-                    addImages(pictures, part, data.url, data.yiciyuan);
+                    addImages(pictures, part, data);
                 } else {
                     String paragraph = narrative(part);
                     if (!paragraph.isEmpty()) {
@@ -538,7 +547,7 @@ final class ReaderEngine {
                     }
                 }
             }
-            url = nextLink(data, field(rules, "nextContentUrl"), visited, chapter.nextChapterUrl);
+            url = nextLink(data, root, field(rules, "nextContentUrl"), visited, chapter.nextChapterUrl);
         }
         String prose = text.toString().trim();
         String replacement = field(rules, "replaceRegex");
@@ -566,7 +575,7 @@ final class ReaderEngine {
             if (computedMangaAddress) {
                 Object address = YiciyuanScript.evaluateYiciyuanUrl(mangaScript, base, query, page);
                 if (!(address instanceof String) || ((String) address).length() > 65_536) {
-                    throw new IOException("异次元地址脚本没有返回有效的请求地址");
+                    throw new IOException("源的地址脚本没有返回有效的请求地址");
                 }
                 rawUrl = normalizeHeaders(((String) address).trim(), base);
             } else {
@@ -575,6 +584,7 @@ final class ReaderEngine {
             }
         } else {
             rawUrl = scriptAddress(declaration.trim(), scripting);
+            if (source.ppcatModern()) rawUrl = PpcatRules.request(rawUrl);
         }
         if (rawUrl.isEmpty()) throw new IOException("来源没有提供有效的网页地址");
         JSONObject options = new JSONObject();
@@ -595,7 +605,7 @@ final class ReaderEngine {
                 try {
                     options.put("charset", rawUrl.substring(encoding + 6));
                 } catch (JSONException malformed) {
-                    throw new IOException("异次元来源的字符编码无效", malformed);
+                    throw new IOException("源的字符编码无效", malformed);
                 }
                 rawUrl = rawUrl.substring(0, encoding);
             }
@@ -609,7 +619,7 @@ final class ReaderEngine {
         String webScript = field(options, "webJs");
         boolean browser = usesBrowser(options);
         if (!rewrite.isEmpty() && yiciyuan) {
-            throw new IOException("此异次元来源依赖专用地址脚本");
+            throw new IOException("此源依赖专用地址脚本");
         }
         String charset = field(options, "charset");
         Charset encoding = StandardCharsets.UTF_8;
@@ -647,7 +657,8 @@ final class ReaderEngine {
             throw new ReaderSources.RuleFailure("来源使用了不支持的请求方法");
         }
         Object body = options.opt("body");
-        boolean jsonBody = body instanceof JSONObject || body instanceof JSONArray;
+        boolean jsonBody = body instanceof JSONObject || body instanceof JSONArray
+                || (source.ppcatModern() && options.optBoolean("_ppcatJson", false));
         String postBody = null;
         if (legacyBody != null) {
             postBody = computedMangaAddress ? legacyBody : expand(legacyBody, keyword, query, base, page, true, null);
@@ -667,7 +678,10 @@ final class ReaderEngine {
         } else {
             response = ReaderSources.fetch(source, url, headers, postBody, charset);
         }
-        return new Data(source, response, scripting == null ? null : scripting.state);
+        YiciyuanScript.PpcatContext ppcat = source.ppcatModern()
+                ? new YiciyuanScript.PpcatContext(source, postBody == null ? "" : postBody, headers, response.body)
+                : null;
+        return new Data(source, response, scripting == null || ppcat != null ? null : scripting.state, ppcat);
     }
 
     private static String yiciyuanAddressScript(String declaration) {
@@ -1034,6 +1048,7 @@ final class ReaderEngine {
         final String key;
         final int page;
         final YiciyuanScript.LegadoScope state;
+        final YiciyuanScript.PpcatContext ppcat;
         int calls;
         long elapsed;
 
@@ -1042,6 +1057,8 @@ final class ReaderEngine {
             this.key = key;
             this.page = page;
             state = new YiciyuanScript.LegadoScope(source, key, page);
+            ppcat = source.ppcatModern()
+                    ? new YiciyuanScript.PpcatContext(source, "", Collections.emptyMap(), "") : null;
         }
 
         String run(String rule, String input) throws IOException {
@@ -1055,7 +1072,8 @@ final class ReaderEngine {
             long networkBefore = state.networkTime();
             Object value;
             try {
-                value = YiciyuanScript.evaluateUrl(rule, input, base, key, page, state);
+                value = ppcat == null ? YiciyuanScript.evaluateUrl(rule, input, base, key, page, state)
+                        : YiciyuanScript.evaluatePpcat(rule, input, base, key, page, ppcat);
             } finally {
                 elapsed += System.nanoTime() - started - (state.networkTime() - networkBefore);
             }
@@ -1091,12 +1109,12 @@ final class ReaderEngine {
         return Long.toString((page + ("-".equals(sign) ? -offset : offset)) * multiplier);
     }
 
-    private static String nextLink(Data data, String rule, Set<String> visited, String stopAt)
+    private static String nextLink(Data data, Object root, String rule, Set<String> visited, String stopAt)
             throws IOException {
         if (rule.isEmpty()) return "";
         String stopUrl = plainUrl(stopAt);
-        for (Object item : select(data, data.root, rule)) {
-            String next = link(data.url, scalar(item));
+        for (Object item : select(data, root, rule)) {
+            String next = sourceLink(data, scalar(item));
             String plain = plainUrl(next);
             if (!next.isEmpty() && !plain.equals(stopUrl) && !visited.contains(plain)) return next;
         }
@@ -1141,6 +1159,10 @@ final class ReaderEngine {
         return address.isEmpty() ? "" : address + reference.substring(split.start());
     }
 
+    private static String sourceLink(Data data, String reference) throws IOException {
+        return link(data.url, data.ppcat == null ? reference : PpcatRules.request(reference));
+    }
+
     private static String normalizeHeaders(String declaration, String base) throws IOException {
         Matcher header = YICYUAN_HEADER.matcher(declaration);
         if (!header.find()) return declaration;
@@ -1167,7 +1189,7 @@ final class ReaderEngine {
             return declaration.substring(0, header.start()).trim() + ","
                     + new JSONObject().put("headers", values);
         } catch (JSONException | MalformedURLException malformed) {
-            throw new IOException("异次元来源的请求头规则格式有误", malformed);
+            throw new IOException("源的请求头规则格式有误", malformed);
         }
     }
 
@@ -1312,7 +1334,7 @@ final class ReaderEngine {
         if (rule.isEmpty()) return Collections.emptyList();
         String headerSuffix = "";
         if (data.yiciyuan) {
-            if (YiciyuanRules.isEncryptedRule(rule)) throw new IOException("此异次元来源使用了加密规则");
+            if (YiciyuanRules.isEncryptedRule(rule)) throw new IOException("此源使用了加密规则");
             rule = YiciyuanRules.restoreEscapedRule(rule);
             Matcher header = YICYUAN_HEADER.matcher(rule);
             if (header.find()) {
@@ -1969,13 +1991,12 @@ final class ReaderEngine {
         return EXCESS_BREAKS.matcher(value).replaceAll("\n\n").trim();
     }
 
-    private static void addImages(Set<String> pictures, Object item, String base, boolean yiciyuan)
-            throws IOException {
+    private static void addImages(Set<String> pictures, Object item, Data data) throws IOException {
         if (item instanceof Element) {
             for (Element image : ((Element) item).select("img")) {
                 String url = "";
                 for (String attr : new String[]{"data-original", "data-src", "data-lazy-src", "data-url", "src"}) {
-                    url = link(base, image.attr(attr));
+                    url = sourceLink(data, image.attr(attr));
                     if (!url.isEmpty()) break;
                 }
                 addPicture(pictures, url);
@@ -1983,11 +2004,11 @@ final class ReaderEngine {
         } else {
             String value = scalar(item);
             if (HTML_MARKUP.matcher(value).find()) {
-                String html = yiciyuan ? YiciyuanRules.quoteImageOptions(value) : value;
-                addImages(pictures, Jsoup.parseBodyFragment(html, base).body(), base, yiciyuan);
+                String html = data.yiciyuan ? YiciyuanRules.quoteImageOptions(value) : value;
+                addImages(pictures, Jsoup.parseBodyFragment(html, data.url).body(), data);
             } else {
                 for (String line : value.split("[\\r\\n]+")) {
-                    String url = link(base, line);
+                    String url = sourceLink(data, line);
                     addPicture(pictures, url);
                 }
             }

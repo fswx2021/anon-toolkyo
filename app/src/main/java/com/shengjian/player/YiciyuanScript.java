@@ -72,29 +72,37 @@ final class YiciyuanScript {
     }
 
     static Object evaluate(String rule, Object input, String baseUrl) throws IOException {
-        return evaluate(rule, input, baseUrl, null, 0, null, null, null);
+        return evaluate(rule, input, baseUrl, null, 0, null, null, null, null);
     }
 
     static Object evaluateUrl(String rule, String input, String baseUrl, String key, int page,
                               LegadoScope source) throws IOException {
-        return evaluate(matches(rule) ? rule : "@js:" + rule, input, baseUrl, key, page, source, null, null);
+        return evaluate(matches(rule) ? rule : "@js:" + rule, input, baseUrl, key, page, source, null, null, null);
     }
 
     static Object evaluateLegado(String rule, Object input, String baseUrl, LegadoScope source,
                                  FieldLookup lookup) throws IOException {
-        return evaluate(rule, input, baseUrl, null, 0, source, null, lookup);
+        return evaluate(rule, input, baseUrl, null, 0, source, null, lookup, null);
     }
 
     static Object evaluateYiciyuan(String rule, Object input, String baseUrl, MangaVariables variables) throws IOException {
-        return evaluate(rule, input, baseUrl, null, 0, null, variables, null);
+        return evaluate(rule, input, baseUrl, null, 0, null, variables, null, null);
     }
 
     static Object evaluateYiciyuanUrl(String rule, String baseUrl, String searchKey, int searchPage) throws IOException {
-        return evaluate(rule, "", baseUrl, searchKey, searchPage, null, null, null);
+        return evaluate(rule, "", baseUrl, searchKey, searchPage, null, null, null, null);
+    }
+
+    record PpcatContext(ReaderSources.Source source, String requestBody, Map<String, String> requestHeaders,
+                        String responseBody) {}
+
+    static Object evaluatePpcat(String rule, Object input, String baseUrl, String key, int page, PpcatContext request)
+            throws IOException {
+        return evaluate(matches(rule) ? rule : "@js:" + rule, input, baseUrl, key, page, null, null, null, request);
     }
 
     private static Object evaluate(String rule, Object input, String baseUrl, String key, int page,
-                                   LegadoScope state, MangaVariables variables, FieldLookup lookup)
+                                   LegadoScope state, MangaVariables variables, FieldLookup lookup, PpcatContext ppcat)
             throws IOException {
         String trimmed = rule.trim();
         String lower = trimmed.toLowerCase(Locale.ROOT);
@@ -139,7 +147,9 @@ final class YiciyuanScript {
                 }
                 ScriptableObject.putProperty(scope, "result", result);
                 installDom(context, scope, baseUrl);
-                if (variables != null) {
+                if (ppcat != null) {
+                    installPpcat(context, scope, ppcat);
+                } else if (variables != null) {
                     installYiciyuanVariables(context, scope, variables);
                 } else if (state != null) {
                     installLegado(context, scope, state, baseUrl, lookup);
@@ -174,6 +184,28 @@ final class YiciyuanScript {
         } catch (RuntimeException | StackOverflowError invalid) {
             if (invalid.getCause() instanceof IOException failure) throw failure;
             throw new IOException("来源脚本无法解析，可能需要该阅读器的专用接口", invalid);
+        }
+    }
+
+    private static void installPpcat(Context context, ScriptableObject scope, PpcatContext request) {
+        JSONObject definition = request.source().definition;
+        JSONObject original = definition.optJSONObject("_ppcatRule");
+        String sourceJson = (original == null ? definition : original).toString();
+        try {
+            JsonParser parser = new JsonParser(context, scope);
+            Scriptable source = (Scriptable) parser.parseValue(sourceJson);
+            ScriptableObject.putProperty(scope, "bookrule", source);
+            ScriptableObject.putProperty(scope, "url", request.source().url);
+            ScriptableObject.putProperty(scope, "baseBody", request.requestBody());
+            ScriptableObject.putProperty(scope, "baseHeader",
+                    parser.parseValue(new JSONObject(request.requestHeaders()).toString()));
+            ScriptableObject.putProperty(scope, "resResult", request.responseBody());
+            ScriptableObject.putProperty(scope, "resState", "");
+            ScriptableObject.putProperty(scope, "resHeader", "");
+            function(scope, scope, "getlib", args -> ScriptableObject.getProperty(source, "bookSourceLib"));
+            function(scope, scope, "getrule", args -> source);
+        } catch (JsonParser.ParseException invalid) {
+            throw Context.reportRuntimeError("源的规则数据无效");
         }
     }
 

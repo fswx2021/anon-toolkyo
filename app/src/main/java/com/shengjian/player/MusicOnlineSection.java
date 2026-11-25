@@ -174,7 +174,7 @@ final class MusicOnlineSection implements AutoCloseable {
         content.addView(header, params(MATCH, WRAP));
 
         LinearLayout actions = row();
-        TextView repository = label("MusicFree 插件仓库", 16, FG, true);
+        TextView repository = label("源仓库", 16, FG, true);
         repository.setPadding(0, 0, dp(8), 0);
         actions.addView(repository, new LinearLayout.LayoutParams(0, WRAP, 1));
         aggregateButton = action("一键聚合", true, this::aggregate);
@@ -517,7 +517,7 @@ final class MusicOnlineSection implements AutoCloseable {
     }
 
     private void aggregate() {
-        runWork("正在更新 MusicFree 清单和已订阅的仓库…", () -> {
+        runWork("正在更新源清单和已订阅的仓库…", () -> {
             MusicSourceCatalog.AggregationResult result = catalog.aggregate();
             if (result.failed() == result.repositories()) throw new IOException("所有订阅都更新失败，请检查网络或订阅链接");
             String counts = importSummary(result.imported());
@@ -528,7 +528,7 @@ final class MusicOnlineSection implements AutoCloseable {
     private void showRepositories() {
         ArrayList<String> addresses = new ArrayList<>(catalog.repositories());
         ArrayList<String> labels = new ArrayList<>();
-        labels.add("MusicFree 官方清单");
+        labels.add("内置源清单");
         for (String address : addresses) {
             Uri uri = Uri.parse(address);
             labels.add(uri.getHost() + (uri.getEncodedPath() == null ? "" : uri.getEncodedPath()));

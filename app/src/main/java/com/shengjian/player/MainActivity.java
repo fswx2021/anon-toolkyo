@@ -104,6 +104,8 @@ public final class MainActivity extends ComponentActivity {
     private InitialSourceSetup sourceSetup;
     private Sheet sourceSetupSheet;
     private boolean sourceSetupPending;
+    private Sheet newMangaSourceSheet;
+    private boolean newMangaSourcePending;
     private boolean checkedOnLaunch, checkingAppUpdate, showUpdateCheckResult;
     private int promptedUpdateVersion;
     private boolean backupContent;
@@ -174,8 +176,9 @@ public final class MainActivity extends ComponentActivity {
 
     @Override public void onCreate(Bundle state) {
         Intent launchIntent = getIntent();
-        boolean launcherStart = state == null && launchIntent != null
+        boolean launcherEntry = launchIntent != null
                 && Intent.ACTION_MAIN.equals(launchIntent.getAction()) && !isAnimeDownloadNotification(launchIntent);
+        boolean launcherStart = state == null && launcherEntry;
         String restoreMessage = loadedApplication ? "" : AppBackup.restoreAtStartup(this);
         loadedApplication = true;
         appSettings = getSharedPreferences("app_settings", MODE_PRIVATE);
@@ -207,6 +210,8 @@ public final class MainActivity extends ComponentActivity {
             if (permissionInstall != null) installAfterPermission = new File(permissionInstall);
             promptedUpdateVersion = state.getInt("prompted_update_version");
             sourceSetupPending = state.getBoolean("source_setup_open");
+            newMangaSourcePending = state.containsKey("new_manga_source_open")
+                    ? state.getBoolean("new_manga_source_open") : launcherEntry && shouldOfferNewMangaSource();
         }
         root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -258,7 +263,8 @@ public final class MainActivity extends ComponentActivity {
             if (!restoreMessage.isEmpty()) toast(restoreMessage);
             if (launcherStart) {
                 sourceSetupPending = shouldOfferSourceSetup();
-                presentPendingSourceSetup();
+                newMangaSourcePending = shouldOfferNewMangaSource();
+                presentStartupPrompts();
                 checkAppUpdate(false);
             }
         };
@@ -283,6 +289,7 @@ public final class MainActivity extends ComponentActivity {
         if (installAfterPermission != null) state.putString("update_after_permission", installAfterPermission.getPath());
         state.putInt("prompted_update_version", promptedUpdateVersion);
         state.putBoolean("source_setup_open", sourceSetupPending || sourceSetupSheet != null);
+        state.putBoolean("new_manga_source_open", newMangaSourcePending || newMangaSourceSheet != null);
         if (!inPlayer && readers[section] != null) readers[section].saveState(state);
         super.onSaveInstanceState(state);
     }
@@ -294,17 +301,11 @@ public final class MainActivity extends ComponentActivity {
     @Override protected void onResume() {
         super.onResume();
         if (section == ANIME && anime != null) anime.onSelected();
-        main.post(() -> {
-            presentPendingSourceSetup();
-            presentPendingAppUpdate();
-        });
+        main.post(this::presentStartupPrompts);
     }
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            presentPendingSourceSetup();
-            presentPendingAppUpdate();
-        }
+        if (hasFocus) presentStartupPrompts();
     }
     @Override protected void onStop() {
         savePosition();
@@ -318,6 +319,12 @@ public final class MainActivity extends ComponentActivity {
             sourceSetupSheet.dialog.setOnDismissListener(null);
             sourceSetupSheet.dialog.dismiss();
             sourceSetupSheet = null;
+        }
+        if (newMangaSourceSheet != null) {
+            sourceSetup.listenNewMangaSource(null);
+            newMangaSourceSheet.dialog.setOnDismissListener(null);
+            newMangaSourceSheet.dialog.dismiss();
+            newMangaSourceSheet = null;
         }
         if (effectsDialog != null) effectsDialog.dismiss();
         if (musicDownloadProgress != null) musicDownloadProgress.sheet.dialog.dismiss();
@@ -336,6 +343,11 @@ public final class MainActivity extends ComponentActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIntent(intent);
+        if (Intent.ACTION_MAIN.equals(intent.getAction()) && !isAnimeDownloadNotification(intent)
+                && newMangaSourceSheet == null && shouldOfferNewMangaSource()) {
+            newMangaSourcePending = true;
+            main.post(this::presentStartupPrompts);
+        }
     }
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -419,7 +431,9 @@ public final class MainActivity extends ComponentActivity {
         miniCard.setVisibility(homeActive && section == MUSIC && visible && current() != null
                 ? View.VISIBLE : View.GONE);
         sectionBar.setVisibility(visibility);
-        if (homeActive && !reading && pendingStartupUpdate != null) presentPendingAppUpdate();
+        if (homeActive && !reading && (newMangaSourcePending || pendingStartupUpdate != null)) {
+            presentStartupPrompts();
+        }
     }
 
     private void updateHomeWidth(boolean reading) {
@@ -1694,7 +1708,8 @@ public final class MainActivity extends ComponentActivity {
             if (manual && foreground) toast(release == null ? "更新渠道暂无正式版本" : "已是最新版本");
             return;
         }
-        if (manual && foreground && updateDownload == null && installAfterPermission == null) {
+        if (manual && foreground && newMangaSourceSheet == null
+                && updateDownload == null && installAfterPermission == null) {
             showAppUpdate(availableAppUpdate);
         } else if (availableAppUpdate.versionCode() > promptedUpdateVersion) {
             pendingStartupUpdate = availableAppUpdate;
@@ -1705,7 +1720,7 @@ public final class MainActivity extends ComponentActivity {
     private void presentPendingAppUpdate() {
         if (!hasWindowFocus() || isFinishing() || isDestroyed()
                 || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)
-                || sourceSetupSheet != null || sourceSetupPending
+                || sourceSetupSheet != null || sourceSetupPending || newMangaSourceSheet != null
                 || updateSheet != null || updateDownload != null || installAfterPermission != null) return;
         if (pendingUpdateInstall != null) {
             File apk = pendingUpdateInstall;
@@ -1753,7 +1768,10 @@ public final class MainActivity extends ComponentActivity {
         Sheet sheet = sheet(heading, "download");
         updateSheet = sheet;
         sheet.dialog.setOnDismissListener(dialog -> {
-            if (updateSheet == sheet) updateSheet = null;
+            if (updateSheet == sheet) {
+                updateSheet = null;
+                if (newMangaSourcePending) main.post(this::presentStartupPrompts);
+            }
         });
         return sheet;
     }
@@ -2012,16 +2030,33 @@ public final class MainActivity extends ComponentActivity {
 
     private boolean shouldOfferSourceSetup() {
         if (appSettings.getBoolean("source_setup_seen", false) || !sourceSetup.sourcesAreInitial()) return false;
+        android.content.pm.PackageInfo installed = installedPackage();
+        return installed != null && installed.firstInstallTime == installed.lastUpdateTime;
+    }
+
+    private boolean shouldOfferNewMangaSource() {
+        android.content.pm.PackageInfo installed = installedPackage();
+        return installed != null && installed.lastUpdateTime > installed.firstInstallTime
+                && !sourceSetup.newMangaSourceAdded();
+    }
+
+    private android.content.pm.PackageInfo installedPackage() {
         try {
-            android.content.pm.PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return installed.firstInstallTime == installed.lastUpdateTime;
+            return getPackageManager().getPackageInfo(getPackageName(), 0);
         } catch (android.content.pm.PackageManager.NameNotFoundException missing) {
-            return false;
+            return null;
         }
     }
 
+    private void presentStartupPrompts() {
+        presentPendingSourceSetup();
+        presentPendingNewMangaSource();
+        presentPendingAppUpdate();
+    }
+
     private void presentPendingSourceSetup() {
-        if (!sourceSetupPending || !hasWindowFocus() || isFinishing() || isDestroyed()
+        if (!sourceSetupPending || newMangaSourceSheet != null || updateSheet != null
+                || !hasWindowFocus() || isFinishing() || isDestroyed()
                 || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)) return;
         sourceSetupPending = false;
         showInitialSourceSetup();
@@ -2078,7 +2113,7 @@ public final class MainActivity extends ComponentActivity {
         sheet.dialog.setOnDismissListener(dialog -> {
             sourceSetup.listen(null);
             sourceSetupSheet = null;
-            main.post(this::presentPendingAppUpdate);
+            main.post(this::presentStartupPrompts);
         });
         appSettings.edit().putBoolean("source_setup_seen", true).apply();
         sourceSetup.listen(render);
@@ -2086,10 +2121,63 @@ public final class MainActivity extends ComponentActivity {
         sheet.show();
     }
 
+    private void presentPendingNewMangaSource() {
+        ReaderSection reader = readers[section];
+        if (!newMangaSourcePending || !hasWindowFocus() || isFinishing() || isDestroyed()
+                || !getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED)
+                || sourceSetupPending || sourceSetupSheet != null || newMangaSourceSheet != null
+                || updateSheet != null || updateDownload != null || pendingUpdateInstall != null
+                || installAfterPermission != null || inPlayer || appSettingsPage != null || keyboardVisible
+                || (reader != null && reader.isReading())) return;
+        newMangaSourcePending = false;
+        if (!sourceSetup.newMangaSourceAdded()) showNewMangaSource();
+    }
+
+    private void showNewMangaSource() {
+        Sheet sheet = sheet("新版漫画源", "download");
+        newMangaSourceSheet = sheet;
+        add(sheet.body, text("本版本新增了一批漫画源。聚合后，搜索漫画时会优先查询这些源。",
+                14, MUTED, false), W, 5);
+        TextView status = text("", 13, MUTED, false);
+        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        add(sheet.body, status, W, 8);
+        TextView begin = action("一键聚合新源", true, sourceSetup::startNewMangaSource);
+        add(sheet.body, begin, 48, 12);
+        TextView later = action("稍后", false, sheet.dialog::dismiss);
+        add(sheet.body, later, 44, 5);
+
+        Runnable render = () -> {
+            if (!sheet.dialog.isShowing()) return;
+            if (sourceSetup.newMangaSourceAdded()) {
+                readers[COMICS].onSelected();
+                sheet.dialog.dismiss();
+                toast("新漫画源已聚合");
+                return;
+            }
+            boolean working = sourceSetup.newMangaSourceWorking();
+            String message = sourceSetup.newMangaSourceMessage();
+            status.setText(message);
+            status.setVisibility(message.isEmpty() ? View.GONE : View.VISIBLE);
+            begin.setText(working ? "正在聚合…" : message.isEmpty() ? "一键聚合新源" : "重试聚合");
+            begin.setEnabled(!working);
+            begin.setAlpha(working ? .5f : 1f);
+            later.setVisibility(working ? View.GONE : View.VISIBLE);
+            sheet.dialog.setCancelable(!working);
+        };
+        sheet.dialog.setOnDismissListener(dialog -> {
+            sourceSetup.listenNewMangaSource(null);
+            newMangaSourceSheet = null;
+            main.post(this::presentStartupPrompts);
+        });
+        sourceSetup.listenNewMangaSource(render);
+        sheet.show();
+        render.run();
+    }
+
     private void showGuide() {
         appSettings.edit().putBoolean("guide_seen", true).apply();
         new android.app.AlertDialog.Builder(this).setTitle("快速上手")
-                .setMessage("音乐支持导入设备文件、公开 B 站链接和媒体直链。漫画与小说可导入本地作品，或按来源搜索。动画支持导入 Kazumi 规则，查看放送日历、选集播放和续看。\n\n设置中的「下载与存储」可管理离线章节，「备份与恢复」用于换机。")
+                .setMessage("音乐支持导入设备文件、公开 B 站链接和媒体直链。漫画与小说可导入本地作品，或按来源搜索。动画支持导入源、查看放送日历、选集播放和续看。\n\n设置中的「下载与存储」可管理离线章节，「备份与恢复」用于换机。")
                 .setPositiveButton("知道了", null).show();
     }
 

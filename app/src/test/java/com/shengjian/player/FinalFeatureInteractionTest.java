@@ -4,6 +4,7 @@ import android.app.Application;
 import android.app.Dialog;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.os.Bundle;
 import android.os.Looper;
 import android.view.View;
@@ -12,12 +13,14 @@ import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.shadows.ShadowDialog;
 
 import java.io.File;
@@ -26,6 +29,7 @@ import java.lang.reflect.Method;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -124,6 +128,8 @@ public class FinalFeatureInteractionTest {
 
     @Test public void initialSourceSetupCanBeSkippedAndReopenedFromSettings() throws Exception {
         Application app = RuntimeEnvironment.getApplication();
+        PackageInfo installed = shadowOf(app.getPackageManager()).getInternalMutablePackageInfo(app.getPackageName());
+        installed.firstInstallTime = installed.lastUpdateTime = 1000;
         shadowOf(app).declareComponentUnbindable(new ComponentName(app, PlaybackService.class));
         try (var controller = Robolectric.buildActivity(MainActivity.class, new Intent(app, MainActivity.class)).create()) {
             MainActivity host = controller.get();
@@ -213,6 +219,63 @@ public class FinalFeatureInteractionTest {
             result.invoke(host, availableUpdate(), null);
             assertNull(sheet.get(host));
         }
+    }
+
+    @Test public void upgradedAppOffersNewMangaSourcesUntilTheyAreImported() throws Exception {
+        Application app = RuntimeEnvironment.getApplication();
+        shadowOf(app).declareComponentUnbindable(new ComponentName(app, PlaybackService.class));
+        app.getSharedPreferences("app_settings", 0).edit()
+                .putBoolean("source_setup_seen", true).putInt("startup_update_check", 1).commit();
+        PackageInfo installed = shadowOf(app.getPackageManager()).getInternalMutablePackageInfo(app.getPackageName());
+        installed.firstInstallTime = installed.lastUpdateTime = 1000;
+        Intent launcher = new Intent(app, MainActivity.class).setAction(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LAUNCHER);
+        Field sheet = field(MainActivity.class, "newMangaSourceSheet");
+        try (var fresh = launch(launcher, null)) {
+            assertNull(sheet.get(fresh.get()));
+        }
+
+        installed.lastUpdateTime = 2000;
+        Bundle dismissedState = new Bundle();
+        try (var upgrade = launch(launcher, null)) {
+            assertNotNull(sheet.get(upgrade.get()));
+            View contents = ShadowDialog.getLatestDialog().getWindow().getDecorView();
+            assertNotNull(label(contents, "新版漫画源"));
+            assertNotNull(label(contents, "一键聚合新源"));
+            assertTrue(label(contents, "稍后").performClick());
+            shadowOf(Looper.getMainLooper()).idle();
+            upgrade.windowFocusChanged(true);
+            assertNull(sheet.get(upgrade.get()));
+            upgrade.saveInstanceState(dismissedState);
+        }
+        try (var restored = launch(launcher, dismissedState)) {
+            assertNull(sheet.get(restored.get()));
+        }
+        try (var nextLaunch = launch(launcher, null)) {
+            assertNotNull(sheet.get(nextLaunch.get()));
+            ShadowDialog.getLatestDialog().dismiss();
+            shadowOf(Looper.getMainLooper()).idle();
+            nextLaunch.pause().newIntent(launcher).resume().postResume().windowFocusChanged(true);
+            shadowOf(Looper.getMainLooper()).idle();
+            assertNotNull(sheet.get(nextLaunch.get()));
+        }
+
+        JSONObject imported = new JSONObject().put("bookSourceName", "新漫画测试源")
+                .put("bookSourceUrl", "https://new-comic.example/")
+                .put("bookSourceType", ReaderSources.COMIC).put("searchUrl", "https://new-comic.example/search")
+                .put("ruleToc", new JSONObject()).put("_ppcat", true).put("_yiciyuan", true);
+        assertEquals(1, AndroidReaderSources.get(app).importText(imported.toString(), ReaderSources.COMIC).added);
+        try (var completed = launch(launcher, null)) {
+            assertNull(sheet.get(completed.get()));
+        }
+    }
+
+    private static ActivityController<MainActivity> launch(Intent intent, Bundle state) {
+        var controller = Robolectric.buildActivity(MainActivity.class, intent);
+        if (state == null) controller.setup();
+        else controller.setup(state);
+        shadowOf(Looper.getMainLooper()).idleFor(1, TimeUnit.SECONDS);
+        return controller.windowFocusChanged(true);
     }
 
     @Test public void searchResultDownloadsWithoutStartingPlayback() throws Exception {

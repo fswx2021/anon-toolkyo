@@ -86,6 +86,7 @@ public final class ReaderVerification {
             ReaderDomVerification.verifySessions(working.resolve("source-sessions.json"));
             ReaderUrlVerification.verify(working.resolve("request-rules.json"));
             ReaderYiciyuanVerification.verify(working.resolve("manga-legacy-rules.json"));
+            verifyPpcat(working.resolve("ppcat-rules.json"));
             verifyAggregation(working.resolve("aggregated.json"));
             verifySourceDeduplication(working.resolve("unique-names.json"), working.resolve("legacy-aliases.json"));
             verifySearchQueue();
@@ -112,6 +113,57 @@ public final class ReaderVerification {
             try (var files = Files.walk(working)) {
                 for (Path path : files.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
             }
+        }
+    }
+
+    private static void verifyPpcat(Path catalog) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/ppcat/search", exchange -> {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            require(exchange.getRequestMethod().equals("POST") && "ppcat".equals(exchange.getRequestHeaders().getFirst("X-Rule")),
+                    "PPCat request modifiers");
+            require("雨\"天".equals(new JSONObject(body).getString("keyword"))
+                    && new JSONObject(body).getInt("offset") == 1, "PPCat JSON template");
+            reply(exchange, "{\"data\":{\"items\":[{\"title\":\"雨天\",\"url\":\"/ppcat/book\"}]}}", "application/json");
+        });
+        server.createContext("/ppcat/book", exchange -> reply(exchange,
+                "<h1>雨天 完整版</h1><a class='catalog' href='/ppcat/toc'>目录</a>", "text/html"));
+        server.createContext("/ppcat/toc", exchange -> reply(exchange,
+                "{\"data\":{\"items\":[{\"caption\":\"第一话\",\"url\":\"/ppcat/episode\"}]}}", "application/json"));
+        server.createContext("/ppcat/episode", exchange -> reply(exchange,
+                "<img src='/images/001.png'><img src='/images/002.png'>", "text/html"));
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            JSONObject export = new JSONObject().put("format", "ppcat").put("bookSourceName", "皮皮喵规则测试")
+                    .put("bookSourceUrl", base + "/ppcat/").put("bookSourceType", "漫画")
+                    .put("titleSuffix", " 漫画")
+                    .put("ruleSearchUrl", "/ppcat/search@{\"keyword\":\"{{key}}\",\"offset\":{{page-1}}}"
+                            + "@Header:{\"X-Rule\":\"ppcat\"}@PostJson")
+                    .put("ruleSearchInit", "@js:JSON.parse(resResult).data")
+                    .put("ruleSearchList", "$.items.*")
+                    .put("ruleSearchName", "$.title@js:result + getrule().titleSuffix")
+                    .put("ruleSearchNoteUrl", "$.url")
+                    .put("ruleBookName", "h1@text")
+                    .put("ruleChapterUrl", "a.catalog@href")
+                    .put("ruleChapterInit", "$.data")
+                    .put("ruleChapterList", "$.items.*").put("ruleChapterName", "$.caption")
+                    .put("ruleContentUrl", "$.url").put("ruleBookContent", "img@src");
+            JSONObject sourceBackup = new JSONObject().put("rules", new JSONArray().put(export));
+            ReaderSources store = new ReaderSources(catalog.toFile(), ReaderVerification::resource);
+            ReaderSources.Source source = store.importText(sourceBackup.toString(), ReaderSources.COMIC).sources.get(0);
+            require(source.ppcatModern(), "PPCat format selection");
+            List<ReaderEngine.Book> books = ReaderEngine.search(source, "雨\"天", 2);
+            require(books.size() == 1 && "雨天 漫画".equals(books.get(0).title), "PPCat search and script scope");
+            ReaderEngine.Book book = ReaderEngine.details(books.get(0));
+            require("雨天 完整版".equals(book.title), "PPCat HTML detail rules");
+            List<ReaderEngine.Chapter> chapters = ReaderEngine.chapters(book);
+            require(chapters.size() == 1 && "第一话".equals(chapters.get(0).title), "PPCat TOC preprocessing");
+            require(ReaderEngine.open(chapters.get(0)).images.equals(List.of(base + "/images/001.png", base + "/images/002.png")),
+                    "PPCat image rules");
+            System.out.println("PASS PPCat export, JSON POST, scripts, detail, chapters and images");
+        } finally {
+            server.stop(0);
         }
     }
 

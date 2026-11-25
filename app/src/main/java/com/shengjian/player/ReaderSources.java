@@ -30,6 +30,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -167,14 +168,24 @@ final class ReaderSources {
             exploreUrl = this.definition.optBoolean("enabledExplore", true)
                     ? text(this.definition, "exploreUrl") : "";
             requestHeaders = parseHeaders(this.definition.opt("header"));
-            searchRevision = java.util.Objects.hash(SEARCH_ENGINE_REVISION, searchUrl, requestHeaders,
+            int revision = java.util.Objects.hash(SEARCH_ENGINE_REVISION, searchUrl, requestHeaders,
                     this.definition.optString("ruleSearch"), this.definition.optString("jsLib"),
                     this.definition.optString("bookSourceComment"), this.definition.optString("sourceVariable"));
+            searchRevision = ppcatModern() ? java.util.Objects.hash(revision, this.definition.optString("_ppcatRule"))
+                    : revision;
             diagnosticRevision = java.util.Objects.hash(SEARCH_ENGINE_REVISION, this.definition.toString());
         }
 
         Map<String, String> headers() {
             return new LinkedHashMap<>(requestHeaders);
+        }
+
+        boolean ppcat() {
+            return kind == COMIC && definition.optBoolean("_ppcat");
+        }
+
+        boolean ppcatModern() {
+            return ppcat() && !definition.optBoolean("_yiciyuan");
         }
     }
 
@@ -265,11 +276,13 @@ final class ReaderSources {
 
     static final class ImportPlan extends ImportResult {
         final int encrypted;
+        final boolean newMangaArchive;
 
         private ImportPlan(int added, int updated, int skipped, List<Source> sources, List<String> diagnostics,
-                           int encrypted) {
+                           int encrypted, boolean newMangaArchive) {
             super(added, updated, skipped, sources, diagnostics);
             this.encrypted = encrypted;
+            this.newMangaArchive = newMangaArchive;
         }
     }
 
@@ -310,11 +323,19 @@ final class ReaderSources {
     }
 
     private final File catalog;
+    private final Path newMangaMarker;
     private final boolean readable;
     private volatile CatalogView view;
+    private volatile boolean newMangaAggregated;
 
     ReaderSources(File catalogFile, SampleOpener sampleOpener) {
         catalog = catalogFile.getAbsoluteFile();
+        newMangaMarker = catalog.toPath().resolveSibling(catalog.getName() + ".new-manga-source");
+        try {
+            newMangaAggregated = Files.isRegularFile(newMangaMarker);
+        } catch (SecurityException ignored) {
+            // Marker access does not affect catalog readability.
+        }
         if (sampleOpener != null) {
             samples = sampleOpener;
         }
@@ -328,6 +349,13 @@ final class ReaderSources {
         }
         view = loaded;
         readable = ok;
+        if (!newMangaAggregated && hasRepositorySources(loaded)) {
+            try {
+                storeNewMangaMarker();
+            } catch (IOException | SecurityException ignored) {
+                // Older imports are still recognized from the catalog when the marker cannot be stored.
+            }
+        }
     }
 
     List<Source> list(int kind) {
@@ -343,6 +371,19 @@ final class ReaderSources {
 
     Source find(String id) {
         return view.byId.get(id);
+    }
+
+    boolean hasNewMangaSource() {
+        return newMangaAggregated || hasRepositorySources(view);
+    }
+
+    private static boolean hasRepositorySources(CatalogView snapshot) {
+        for (Source source : snapshot.byId.values()) {
+            if (source.ppcat() && source.definition.optBoolean("_yiciyuan") && snapshot.listed.contains(source.id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     ImportResult importFile(File file, int kind) throws IOException {
@@ -368,13 +409,33 @@ final class ReaderSources {
     }
 
     ImportPlan prepareUrl(String link, int kind) throws IOException {
-        Download download = download(importLink(link), Collections.emptyMap(), null, SOURCE_LIMIT);
-        return preparePayload(download.bytes, download.type, kind);
+        return prepareRemote(link, kind, SOURCE_LIMIT, true);
     }
 
     ImportPlan prepareAggregateUrl(String link, int kind) throws IOException {
-        Download download = download(importLink(link), Collections.emptyMap(), null, AGGREGATION_FEED_LIMIT);
-        return preparePayload(download.bytes, download.type, kind, AGGREGATION_FEED_LIMIT, false);
+        return prepareRemote(link, kind, AGGREGATION_FEED_LIMIT, false);
+    }
+
+    private ImportPlan prepareRemote(String link, int kind, int limit, boolean manual) throws IOException {
+        String address = importLink(link);
+        boolean ppcat = PpcatStore.FEED_URL.equals(address);
+        if (ppcat && kind == NOVEL) throw new IOException("此仓库仅包含漫画源");
+        try {
+            Download data = download(address, Collections.emptyMap(), null, limit);
+            ImportPlan plan = preparePayload(data.bytes, data.type, kind, limit, manual);
+            if (ppcat && !plan.newMangaArchive) throw new IOException("源仓库返回了不受支持的格式");
+            return plan;
+        } catch (IOException primary) {
+            if (!ppcat || Thread.currentThread().isInterrupted()) throw primary;
+            try {
+                Download mirror = download(PpcatStore.MIRROR_URL, Collections.emptyMap(), null, limit);
+                PpcatStore.verifyMirror(mirror.bytes);
+                return preparePayload(mirror.bytes, mirror.type, kind, limit, manual);
+            } catch (IOException failed) {
+                failed.addSuppressed(primary);
+                throw failed;
+            }
+        }
     }
 
     ImportResult importText(String json, int kind) throws IOException {
@@ -382,10 +443,10 @@ final class ReaderSources {
     }
 
     ImportPlan prepareText(String json, int kind) throws IOException {
-        return prepareRows(sourceArray(json, kind, SOURCE_LIMIT), kind, true);
+        return prepareRows(sourceArray(json, kind, SOURCE_LIMIT), kind, true, false);
     }
 
-    private ImportPlan prepareRows(JSONArray input, int kind, boolean manual) throws IOException {
+    private ImportPlan prepareRows(JSONArray input, int kind, boolean manual, boolean ppcatArchive) throws IOException {
         checkWritable();
         if (kind != NOVEL && kind != COMIC && kind != ALL) {
             throw new IOException("未知书源类型");
@@ -404,8 +465,10 @@ final class ReaderSources {
                 describe(diagnostics, i, "需要 JSON 对象");
                 continue;
             }
-            boolean yiciyuan = YiciyuanRules.matches(definition);
-            int actualKind = yiciyuan ? COMIC : sourceKind(definition);
+            boolean legacy = YiciyuanRules.matches(definition);
+            boolean ppcat = !(ppcatArchive && legacy) && PpcatRules.matches(definition);
+            boolean yiciyuan = !ppcat && legacy;
+            int actualKind = ppcat || yiciyuan ? COMIC : sourceKind(definition);
             if (actualKind != NOVEL && actualKind != COMIC) {
                 describe(diagnostics, i, "暂不支持此书源类型");
                 continue;
@@ -414,11 +477,15 @@ final class ReaderSources {
                 describe(diagnostics, i, actualKind == COMIC ? "属于漫画源" : "属于小说源");
                 continue;
             }
-            if (yiciyuan) {
+            if (ppcat || yiciyuan) {
                 try {
-                    definition = YiciyuanRules.normalize(definition);
+                    definition = ppcat ? PpcatRules.normalize(definition) : YiciyuanRules.normalize(definition);
+                    if (ppcatArchive) definition.put("_ppcat", true);
                 } catch (IOException invalid) {
-                    describe(diagnostics, i, "无法转换异次元规则");
+                    describe(diagnostics, i, ppcat ? invalid.getMessage() : "无法转换源规则");
+                    continue;
+                } catch (JSONException invalid) {
+                    describe(diagnostics, i, "无法保存源信息");
                     continue;
                 }
             }
@@ -466,7 +533,7 @@ final class ReaderSources {
         }
         if (manual && imported.isEmpty()) {
             String label = kind == ALL ? "小说或漫画源"
-                    : kind == COMIC ? "漫画源（异次元或阅读类型 2）" : "小说源（阅读类型 0）";
+                    : kind == COMIC ? "漫画源" : "小说源";
             String detail = diagnostics.isEmpty() ? "" : "\n" + diagnostics.get(0);
             throw new IOException("没有找到可导入的" + label + "。" + detail);
         }
@@ -474,7 +541,7 @@ final class ReaderSources {
             throw new IOException("已达到书源数量上限，请先移除不用的书源");
         }
         return new ImportPlan(added, imported.size() - added, input.length() - imported.size(),
-                new ArrayList<>(imported.values()), diagnostics, encrypted);
+                new ArrayList<>(imported.values()), diagnostics, encrypted, ppcatArchive);
     }
 
     synchronized ImportResult apply(ImportPlan plan) throws IOException {
@@ -510,6 +577,7 @@ final class ReaderSources {
             throw new IOException("已达到书源数量上限，请先移除不用的书源");
         }
         if (!applied.isEmpty()) save(updatedSources);
+        if (plan.newMangaArchive) rememberNewMangaSource(plan.sources);
         return new ImportResult(added, applied.size() - added, skipped, applied, diagnostics);
     }
 
@@ -526,9 +594,17 @@ final class ReaderSources {
     }
 
     synchronized AggregateChanges addMissing(List<Source> candidates, int kind, int skipped) throws IOException {
+        return addMissing(candidates, kind, skipped, Collections.emptyList());
+    }
+
+    synchronized AggregateChanges addMissing(List<Source> candidates, int kind, int skipped,
+                                             List<Source> repositorySources) throws IOException {
         checkWritable();
-        if (candidates.isEmpty()) return new AggregateChanges(new ImportResult(0, 0, skipped,
-                Collections.emptyList(), Collections.emptyList()), 0, false);
+        if (candidates.isEmpty()) {
+            rememberNewMangaSource(repositorySources);
+            return new AggregateChanges(new ImportResult(0, 0, skipped,
+                    Collections.emptyList(), Collections.emptyList()), 0, false);
+        }
         CatalogView snapshot = view;
         Map<String, Source> merged = new LinkedHashMap<>(snapshot.byId);
         SourceKeys keys = new SourceKeys(merged.values());
@@ -557,8 +633,33 @@ final class ReaderSources {
             added.add(proposed);
         }
         if (!added.isEmpty()) save(merged);
+        rememberNewMangaSource(repositorySources);
         return new AggregateChanges(new ImportResult(added.size(), 0, skipped, added,
                 Collections.emptyList()), added.size(), limited);
+    }
+
+    private void rememberNewMangaSource(List<Source> repositorySources) throws IOException {
+        if (newMangaAggregated || repositorySources.isEmpty()) return;
+        CatalogView snapshot = view;
+        if (!hasRepositorySources(snapshot)) {
+            SourceKeys known = new SourceKeys(snapshot.byId.values());
+            if (!repositorySources.stream().allMatch(known::contains)) return;
+        }
+        try {
+            storeNewMangaMarker();
+        } catch (IOException failure) {
+            // Import has already committed and can be recognized from the catalog if the marker cannot be stored.
+            if (!hasRepositorySources(snapshot)) throw failure;
+        }
+    }
+
+    private void storeNewMangaMarker() throws IOException {
+        try {
+            Files.createFile(newMangaMarker);
+        } catch (FileAlreadyExistsException exists) {
+            if (!Files.isRegularFile(newMangaMarker)) throw exists;
+        }
+        newMangaAggregated = true;
     }
 
     static String aggregationKey(int kind, String address) {
@@ -591,6 +692,12 @@ final class ReaderSources {
 
     private ImportPlan preparePayload(byte[] data, String type, int kind, int limit, boolean manual)
             throws IOException {
+        if (kind != NOVEL) {
+            byte[] ppcat = PpcatStore.unpack(data, limit);
+            if (ppcat != null) {
+                return prepareRows(sourceArray(decode(ppcat, "", ""), kind, limit), kind, manual, true);
+            }
+        }
         if (data.length >= 2 && (data[0] & 0xff) == 0x1f && (data[1] & 0xff) == 0x8b) {
             try (InputStream stream = new GZIPInputStream(new ByteArrayInputStream(data))) {
                 data = read(stream, limit);
@@ -607,9 +714,9 @@ final class ReaderSources {
                     rows.put(entry.opt(i));
                 }
             }
-            return prepareRows(rows, kind, manual);
+            return prepareRows(rows, kind, manual, false);
         }
-        return prepareRows(sourceArray(decode(data, type, ""), kind, limit), kind, manual);
+        return prepareRows(sourceArray(decode(data, type, ""), kind, limit), kind, manual, false);
     }
 
     private static boolean isZip(byte[] data) {
@@ -860,7 +967,7 @@ final class ReaderSources {
         if (object.has("bookSourceUrl")) {
             return new JSONArray().put(object);
         }
-        for (String key : new String[]{"bookSources", "sources", "bookSource", "myBookSource", "data"}) {
+        for (String key : new String[]{"bookSources", "sources", "bookSource", "myBookSource", "data", "rules"}) {
             Object value = object.opt(key);
             if (value instanceof JSONArray) {
                 return (JSONArray) value;
@@ -910,11 +1017,11 @@ final class ReaderSources {
         try (InputStream stream = new InflaterInputStream(new ByteArrayInputStream(compressed), inflater)) {
             byte[] expanded = read(stream, limit);
             if (!inflater.finished() || inflater.getBytesRead() != compressed.length) {
-                throw new IOException("异次元压缩图源不完整或包含多余数据");
+                throw new IOException("压缩源文件不完整或包含多余数据");
             }
             return decode(expanded, "", "");
         } catch (EOFException | ZipException invalid) {
-            throw new IOException("异次元压缩图源无法解压，请重新下载", invalid);
+            throw new IOException("压缩源文件无法解压，请重新下载", invalid);
         } finally {
             inflater.end();
         }
@@ -955,6 +1062,12 @@ final class ReaderSources {
         }
         URI uri = webUri(value);
         String host = uri.getHost().toLowerCase(Locale.ROOT);
+        if (host.equals("github.com") && "https".equalsIgnoreCase(uri.getScheme())) {
+            String path = uri.getPath().toLowerCase(Locale.ROOT);
+            if (path.equals("/acglibrary/ppcat_store") || path.equals("/acglibrary/ppcat_store/")
+                    || path.equals("/acglibrary/ppcat_store/blob/master/store")
+                    || path.equals("/acglibrary/ppcat_store/raw/master/store")) return PpcatStore.FEED_URL;
+        }
         if ("www.yckceo.com".equals(host) || "yckceo.com".equals(host)) {
             Matcher detail = REPO_DETAIL.matcher(uri.getRawPath());
             if (detail.matches()) {

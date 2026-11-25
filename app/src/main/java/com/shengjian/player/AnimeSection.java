@@ -374,7 +374,7 @@ final class AnimeSection {
         recentWatching = featureAction("观看记录", "history");
         recentWatching.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         shelves.addView(recentWatching, params(M, dp(44)));
-        ruleShortcut = featureAction("从规则仓库添加动画源　›", "catalog");
+        ruleShortcut = featureAction("从仓库添加动画源　›", "catalog");
         ruleShortcut.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         ruleShortcut.setTextColor(PlayerViews.textTone(PINK));
         shelves.addView(ruleShortcut, params(M, dp(44)));
@@ -383,7 +383,7 @@ final class AnimeSection {
         shelves.addView(homePopular, params(M, W));
         updateHomePopular();
         LinearLayout tools = row();
-        addEqual(tools, featureAction("规则仓库", "catalog"));
+        addEqual(tools, featureAction("源仓库", "catalog"));
         addEqual(tools, featureAction("同步", "sync"));
         addEqual(tools, featureAction("动画设置", "settings"));
         shelves.addView(tools, withTopGap(12));
@@ -1172,7 +1172,7 @@ final class AnimeSection {
         add(aggregationCard(), 8);
         LinearLayout buttons = row();
         addEqual(buttons, action("选择文件", false, this::pickFile));
-        addEqual(buttons, action("粘贴规则", false, () -> askImport(false)));
+        addEqual(buttons, action("粘贴源", false, () -> askImport(false)));
         addEqual(buttons, action("从链接", false, () -> askImport(true)));
         add(buttons, 8);
         addRule();
@@ -1191,7 +1191,7 @@ final class AnimeSection {
         LinearLayout countRow = row();
         countRow.addView(label(host.getString(R.string.reader_source_count, enabled, "动画源"), 13, MUTED, false),
                 new LinearLayout.LayoutParams(0, W, 1));
-        countRow.addView(action("导出全部规则", false, this::chooseExportFile), params(W, dp(44)));
+        countRow.addView(action("导出全部源", false, this::chooseExportFile), params(W, dp(44)));
         add(countRow, 8);
         ListView list = listView();
         list.setAdapter(new BaseAdapter() {
@@ -1230,7 +1230,7 @@ final class AnimeSection {
     private View aggregationCard() {
         LinearLayout panel = column();
         LinearLayout controls = row();
-        controls.addView(label("Kazumi 规则仓库", 16, FG, true), new LinearLayout.LayoutParams(0, W, 1));
+        controls.addView(label("源仓库", 16, FG, true), new LinearLayout.LayoutParams(0, W, 1));
         TextView aggregate = action(aggregating ? "聚合中…" : "一键聚合", true, this::aggregateSources);
         aggregate.setEnabled(!importing);
         controls.addView(aggregate, params(W, dp(44)));
@@ -1243,7 +1243,7 @@ final class AnimeSection {
         }
         if (aggregationResult != null && !aggregationResult.diagnostics.isEmpty()) {
             TextView details = action("查看详情", false, () -> dialog(new AlertDialog.Builder(host)
-                    .setTitle("Kazumi 聚合详情")
+                    .setTitle("源聚合详情")
                     .setMessage(aggregationStatus + "\n\n" + TextUtils.join("\n", aggregationResult.diagnostics))
                     .setPositiveButton("关闭", null)));
             panel.addView(details, params(W, dp(44)));
@@ -1260,7 +1260,7 @@ final class AnimeSection {
         importing = true;
         aggregating = true;
         aggregationResult = null;
-        aggregationStatus = "正在读取 Kazumi 规则仓库…";
+        aggregationStatus = "正在读取源仓库…";
         openSources();
         io.execute(() -> {
             AnimeSource.AggregationResult result = null;
@@ -1345,7 +1345,7 @@ final class AnimeSection {
                     if (output == null) throw new IOException("无法写入所选文件");
                     output.write(payload);
                 }
-                status = "动画规则已导出";
+                status = "动画源已导出";
             } catch (IOException | RuntimeException failure) {
                 status = "导出失败 · " + problem(failure);
             }
@@ -1356,7 +1356,7 @@ final class AnimeSection {
 
     private void askImport(boolean link) {
         if (importing) { toast("请等当前导入完成"); return; }
-        EditText field = input(link ? "粘贴分享链接、规则链接或索引链接" : "粘贴 Kazumi JSON 规则", true);
+        EditText field = input(link ? "粘贴源链接或仓库链接" : "粘贴源的 JSON 内容", true);
         field.setMinLines(link ? 2 : 5);
         LinearLayout space = column();
         space.setPadding(dp(18), dp(5), dp(18), 0);

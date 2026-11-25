@@ -306,7 +306,7 @@ final class MusicSourceCatalog {
         for (String address : OFFICIAL_ADDRESSES) {
             try {
                 Batch batch = fetch(address);
-                if (!batch.repository()) throw new IOException("MusicFree 官方地址没有返回订阅清单");
+                if (!batch.repository()) throw new IOException("内置源仓库没有返回订阅清单");
                 return new Batch(batch.sources(), batch.skipped(), true, OFFICIAL_REPOSITORY);
             } catch (IOException failed) {
                 if (Thread.currentThread().isInterrupted()) throw failed;
@@ -314,7 +314,7 @@ final class MusicSourceCatalog {
                 else failure.addSuppressed(failed);
             }
         }
-        throw new IOException("无法更新 MusicFree 官方订阅，请检查网络后重试", failure);
+        throw new IOException("无法更新内置源清单，请检查网络后重试", failure);
     }
 
     static Batch fetch(String address) throws IOException {
@@ -361,7 +361,7 @@ final class MusicSourceCatalog {
                 }
                 rows = object.optJSONArray("plugins");
             } else rows = null;
-            if (rows == null) throw new IOException("MusicFree 订阅须包含 plugins 数组");
+            if (rows == null) throw new IOException("源订阅清单须包含 plugins 数组");
             Map<String, Source> sources = new LinkedHashMap<>();
             int skipped = Math.max(0, rows.length() - MAX_SOURCES);
             for (int index = 0; index < Math.min(rows.length(), MAX_SOURCES); index++) {
@@ -379,7 +379,7 @@ final class MusicSourceCatalog {
                     } else skipped++;
                 } catch (IOException invalid) { skipped++; }
             }
-            if (sources.isEmpty()) throw new IOException("MusicFree 清单中没有有效的音乐源");
+            if (sources.isEmpty()) throw new IOException("订阅清单中没有有效的音乐源");
             return new Batch(new ArrayList<>(sources.values()), skipped, true, origin);
         }
         return new Batch(List.of(script(value, origin)), 0, false, origin);
@@ -398,7 +398,7 @@ final class MusicSourceCatalog {
 
     private static Source script(String body, String address) throws IOException {
         Matcher export = EXPORT.matcher(body);
-        if (!export.find()) throw new IOException("请选择 MusicFree 的订阅 JSON 或导出插件对象的 JS 文件");
+        if (!export.find()) throw new IOException("请选择源订阅 JSON 或导出的源规则 JS 文件");
         String fields = body.substring(export.end(), Math.min(body.length(), export.end() + 24_576));
         String name = scriptField(fields, "platform");
         String declared = scriptField(fields, "srcUrl");
@@ -547,6 +547,6 @@ final class MusicSourceCatalog {
             out.write(buffer, 0, count);
         }
         try { return StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(out.toByteArray())).toString(); }
-        catch (CharacterCodingException invalid) { throw new IOException("请选择 UTF-8 编码的 MusicFree 文件", invalid); }
+        catch (CharacterCodingException invalid) { throw new IOException("请选择 UTF-8 编码的源文件", invalid); }
     }
 }

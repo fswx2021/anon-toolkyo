@@ -16,6 +16,7 @@ $sharedFiles = @('ReaderSources.java', 'ReaderEngine.java', 'ReaderRuleSupport.j
     'AnimeDanmakuCommunity.java',
     'ReaderAggregation.java', 'ReaderRepositoryIndex.java', 'ReaderSearchQueue.java', 'ReaderSearchRanking.java',
     'ReaderSourceHealth.java', 'ReaderSourceDiagnostics.java', 'ReaderWorkMatcher.java', 'NovelTextTools.java', 'YiciyuanRules.java', 'YiciyuanScript.java',
+    'PpcatRules.java', 'PpcatStore.java',
     'Lyrics.java', 'LinkResolver.java', 'MusicCollections.java', 'MusicImportTask.java') |
     ForEach-Object { Join-Path $shared $_ }
 $desktopFiles = (Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src/main/java') -Recurse -Filter '*.java').FullName

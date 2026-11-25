@@ -108,6 +108,8 @@ final class ReaderSection {
     private static final String[] SHELF_FILTERS = {"全部", "收藏", "读过", "本地"};
     private static final String[] SHELF_ORDERS = {"收藏优先", "最近阅读", "按书名", "按作者"};
     private static final String[] DIAGNOSTIC_FILTERS = {"全部状态", "通过", "失败", "未检查", "未匹配／受限"};
+    private static final Comparator<ReaderSources.Source> PPCAT_FIRST =
+            Comparator.comparing(source -> !source.ppcat());
     private static final Uri MANGA_SOURCE_REPOSITORY =
             Uri.parse("https://www.yckceo.com/yiciyuan/tuyuan/index.html");
     private enum Screen { HOME, SOURCES, CHAPTERS, READER, DOWNLOADS, HISTORY }
@@ -125,7 +127,6 @@ final class ReaderSection {
     private final int kind;
     private final int pickerRequestCode;
     private final Runnable screenChanged;
-    private final String sourceWord;
     private final String sectionName;
     private final ReaderSources sources;
     private final ReaderProgress progress;
@@ -206,7 +207,6 @@ final class ReaderSection {
         localBooks = new ReaderLocalBooks(new File(host.getFilesDir(), "reader-local"));
         screenChanged = onScreenChanged;
         kind = manga ? ReaderSources.COMIC : ReaderSources.NOVEL;
-        sourceWord = manga ? "漫画源" : "书源";
         sectionName = manga ? "漫画" : "小说";
         sources = AndroidReaderSources.get(host);
         progress = new ReaderProgress(host, manga);
@@ -467,7 +467,7 @@ final class ReaderSection {
     }
 
     private View buildHomeHeading() {
-        sourceCount = SectionControls.action(host, manga ? "图源" : "书源", true, this::showSources);
+        sourceCount = SectionControls.action(host, "源", true, this::showSources);
         updateSourceCount();
         return SectionControls.heading(host, sectionName, sourceCount);
     }
@@ -502,8 +502,8 @@ final class ReaderSection {
 
     private void updateSourceCount() {
         if (sourceCount != null) {
-            sourceCount.setContentDescription("管理" + sourceWord + " · "
-                    + host.getString(R.string.reader_source_count, enabledSources().size(), sourceWord));
+            sourceCount.setContentDescription("管理源 · "
+                    + host.getString(R.string.reader_source_count, enabledSources().size(), "源"));
         }
     }
 
@@ -545,8 +545,8 @@ final class ReaderSection {
             boolean hasSources = !enabledSources().isEmpty();
             LinearLayout emptyBody = column();
             emptyBody.addView(emptyShelf(MyGoEmotes.icon(host, R.drawable.mygo_peek, 34),
-                    "书架还没有作品", hasSources ? "" : "添加" + sourceWord + "即可搜索。",
-                    hasSources ? "搜索" : "添加" + sourceWord,
+                    "书架还没有作品", hasSources ? "" : "添加源即可搜索。",
+                    hasSources ? "搜索" : "添加源",
                     hasSources ? this::focusSearch : this::showSources), lp(M, W));
             if (!sampleAsset.isEmpty() && !hasSources) attachTrySample(emptyBody);
             feed.addView(scroll(emptyBody), new LinearLayout.LayoutParams(M, 0, 1));
@@ -656,7 +656,7 @@ final class ReaderSection {
                     entry.historyCountPartial) + "\n" + entry.chapterTitle;
             cells.add(new Cell(entry.title, subtitle, null, entry.cover, source, () -> {
                 if (source == null) {
-                    toast("请重新导入此作品的" + sourceWord);
+                    toast("请重新导入此作品的源");
                     return;
                 }
                 selectBook(entry.toBook(source), entry.chapterUrl, true);
@@ -948,8 +948,8 @@ final class ReaderSection {
 
             emptySearchEmote = state.total == 0 ? null : MyGoEmotes.icon(host, R.drawable.mygo_look, 34);
             empty = state.total == 0
-                    ? emptyShelf(null, "没有可搜索的来源", "请启用带搜索入口的" + sourceWord + "。",
-                            "管理" + sourceWord, ReaderSection.this::showSources)
+                    ? emptyShelf(null, "没有可搜索的源", "请启用带搜索入口的源。",
+                            "管理源", ReaderSection.this::showSources)
                     : emptyShelf(emptySearchEmote, "尚无结果", "", "更换关键词",
                             ReaderSection.this::focusSearch);
             parent.addView(empty, lp(M, W));
@@ -1317,7 +1317,7 @@ final class ReaderSection {
         return new Cell(entry.title, subtitle, badge, original == null ? "" : entry.cover,
                 source, () -> {
                     if (source == null) {
-                        toast("请重新导入此作品的" + sourceWord);
+                        toast("请重新导入此作品的源");
                         return;
                     }
                     selectBook(entry.toBook(source));
@@ -1425,9 +1425,13 @@ final class ReaderSection {
             if (!TextUtils.equals(status.getText(), label)) status.setText(label);
             if (cells.size() == group.editions.size()) return;
 
+            List<ReaderEngine.Book> arrivals = group.editions.subList(cells.size(), group.editions.size());
+            if (manga && cells.isEmpty()) {
+                arrivals = new ArrayList<>(arrivals);
+                arrivals.sort(Comparator.comparing(edition -> edition.source, PPCAT_FIRST));
+            }
             // Append arrivals so an item the user is about to tap keeps its position and identity.
-            for (int i = cells.size(); i < group.editions.size(); i++) {
-                ReaderEngine.Book edition = group.editions.get(i);
+            for (ReaderEngine.Book edition : arrivals) {
                 int number = perSource.merge(edition.source.id, 1, Integer::sum);
                 String author = TextUtils.isEmpty(edition.author) || edition.author.isBlank() ? "作者未知" : edition.author;
                 String detail = number == 1 ? author : join(author, "同源条目 " + number);
@@ -1498,7 +1502,9 @@ final class ReaderSection {
         if (targets.size() <= 1) return;
         Map<String, Integer> priorities = new HashMap<>();
         for (ReaderSources.Source source : targets) priorities.put(source.id, searchHealth.priority(source, now));
-        targets.sort(Comparator.<ReaderSources.Source>comparingInt(source -> priorities.get(source.id)).reversed());
+        Comparator<ReaderSources.Source> byHealth =
+                Comparator.<ReaderSources.Source>comparingInt(source -> priorities.get(source.id)).reversed();
+        targets.sort(manga ? PPCAT_FIRST.thenComparing(byHealth) : byHealth);
     }
 
     private static String searchEligibility(ReaderSources.Source source) {
@@ -1523,7 +1529,7 @@ final class ReaderSection {
             }
         }
         if (choices.isEmpty()) {
-            toast(firstNonempty(entryError, "已启用的" + sourceWord + "没有发现入口"));
+            toast(firstNonempty(entryError, "已启用的源没有发现入口"));
             return;
         }
         String[] names = new String[choices.size()];
@@ -1698,7 +1704,7 @@ final class ReaderSection {
                     return "来源返回了列表，但书名或链接提取规则与页面不匹配。";
                 case "来源请求参数无法解析":
                 case "来源脚本的辅助请求参数无法解析":
-                case "异次元来源的请求头规则格式有误":
+                case "源的请求头规则格式有误":
                     return "来源的请求参数格式有误，请检查地址或请求头规则。";
                 case "来源脚本的辅助请求须访问来源自身站点":
                 case "来源脚本的有效地址跳转到其他站点":
@@ -2013,10 +2019,11 @@ final class ReaderSection {
         boolean restoreFilterFocus = sourceFilterInput != null && sourceFilterInput.hasFocus();
         int filterCursor = restoreFilterFocus ? sourceFilterInput.getSelectionStart() : -1;
         List<ReaderSources.Source> catalog = sources.list(kind);
+        if (manga) catalog.sort(PPCAT_FIRST);
         int active = 0;
         for (ReaderSources.Source source : catalog) if (source.enabled) active++;
         reset(Screen.SOURCES);
-        LinearLayout header = topBar(sourceWord + "管理", "已启用 " + active + " / " + catalog.size(), this::showHome);
+        LinearLayout header = topBar("源管理", "已启用 " + active + " / " + catalog.size(), this::showHome);
         scene.addView(header, lp(M, W));
         scene.addView(aggregationPanel(), inset(0, 8));
 
@@ -2024,13 +2031,13 @@ final class ReaderSection {
         scene.addView(sourceFilterBar(rows, active), lp(M, W));
         LinearLayout content = column();
         content.setPadding(0, dp(8), 0, dp(6));
-        TextView importHeading = text("导入" + sourceWord, 17, FG, true);
+        TextView importHeading = text("导入源", 17, FG, true);
         markHeading(importHeading);
         content.addView(importHeading, lp(M, W));
         LinearLayout operation = row();
         addImportTile(operation, "file", "选择文件", this::chooseFile);
         addImportTile(operation, "link", "从链接", () -> askImport(true));
-        addImportTile(operation, "queue", manga ? "粘贴规则" : "粘贴 JSON", () -> askImport(false));
+        addImportTile(operation, "queue", "粘贴规则", () -> askImport(false));
         LinearLayout.LayoutParams ops = lp(M, W);
         ops.topMargin = dp(7);
         content.addView(operation, ops);
@@ -2041,10 +2048,10 @@ final class ReaderSection {
         }
         if (!sampleAsset.isEmpty()) attachTrySample(content);
         if (editingSources) {
-            String message = aggregatingSources ? "来源变更将于聚合结束后处理…" : "正在更新" + sourceWord + "…";
+            String message = aggregatingSources ? "源变更将于聚合结束后处理…" : "正在更新源…";
             content.addView(loading(message), lp(M, W));
         } else if (catalog.isEmpty() && !aggregatingSources) {
-            content.addView(note("目前没有已导入的" + sourceWord), lp(M, W));
+            content.addView(note("目前没有已导入的源"), lp(M, W));
         }
         sourceList = newList();
         sourceList.addHeaderView(content, null, false);
@@ -2123,7 +2130,7 @@ final class ReaderSection {
         editSources(() -> {
             sources.setAllEnabled(kind, enabled);
             return null;
-        }, "已" + (enabled ? "启用" : "停用") + "全部" + sourceWord);
+        }, "已" + (enabled ? "启用" : "停用") + "全部源");
     }
 
     private void updateFilterStatus(TextView filterStatus, SourceCatalogAdapter rows) {
@@ -2209,7 +2216,7 @@ final class ReaderSection {
 
         LinearLayout status = row();
         status.setGravity(Gravity.CENTER_VERTICAL);
-        String message = firstNonempty(aggregationMessage, "从公开列表导入" + sourceWord);
+        String message = firstNonempty(aggregationMessage, "从公开列表导入源");
         aggregationStatus = text(message, 13, MUTED, false);
         aggregationStatus.setPadding(dp(5), dp(1), dp(4), dp(3));
         status.addView(aggregationStatus, weight(W));
@@ -2315,10 +2322,10 @@ final class ReaderSection {
         card.setBackground(surface(host, SOFT_MINT, 15, 0));
         LinearLayout heading = row();
         heading.setGravity(Gravity.CENTER_VERTICAL);
-        heading.addView(text("异次元图源", 15, DEEP_MINT, true), weight(W));
-        heading.addView(action("浏览图源仓库", false, this::openMangaRepository), lp(W, 48));
+        heading.addView(text("源仓库", 15, DEEP_MINT, true), weight(W));
+        heading.addView(action("浏览源仓库", false, this::openMangaRepository), lp(W, 48));
         card.addView(heading, lp(M, W));
-        card.addView(text("复制图源详情页或 JSON 下载链接，再点「从链接」。", 13, MUTED, false), lp(M, W));
+        card.addView(text("可从链接或文件导入源，也可一键聚合公开源。", 13, MUTED, false), lp(M, W));
         return card;
     }
 
@@ -2540,7 +2547,7 @@ final class ReaderSection {
         List<ReaderSources.Source> all = sources.list(kind);
         int[] count = sourceDiagnostics.counts(all);
         int tested = 0;
-        StringBuilder summary = new StringBuilder(sourceWord).append("检查报告\n");
+        StringBuilder summary = new StringBuilder("源检查报告\n");
         for (ReaderSourceDiagnostics.Status status : ReaderSourceDiagnostics.Status.values()) {
             int value = count[status.ordinal()];
             tested += value;
@@ -2565,7 +2572,7 @@ final class ReaderSection {
 
     private void chooseDiagnosticsDestination() {
         Intent picker = new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/tab-separated-values")
-                .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, sourceWord + "检查报告.tsv");
+                .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE, "源检查报告.tsv");
         try {
             host.startActivityForResult(picker, manga ? COMIC_DIAGNOSTICS_EXPORT : NOVEL_DIAGNOSTICS_EXPORT);
         } catch (ActivityNotFoundException unavailable) {
@@ -2771,7 +2778,7 @@ final class ReaderSection {
     }
 
     private void confirmRemove(ReaderSources.Source source) {
-        showDialog(new AlertDialog.Builder(host).setTitle("移除" + sourceWord + "？")
+        showDialog(new AlertDialog.Builder(host).setTitle("移除此源？")
                 .setMessage("已下载的章节仍可离线阅读。在线章节需要重新导入该来源，或为作品换源。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("移除", (confirm, action) -> editSources(() -> {
@@ -2861,10 +2868,9 @@ final class ReaderSection {
 
     private void askImport(boolean url) {
         if (editingSources) return;
-        String pasteLabel = manga ? "粘贴规则" : "粘贴 JSON";
         String hint = url
-                ? (manga ? "粘贴图源、合集详情页或 JSON 链接" : "https://…")
-                : (manga ? "粘贴完整的图源规则" : "粘贴完整的 JSON");
+                ? "粘贴源链接、仓库地址或合集详情页链接"
+                : "粘贴完整的源规则";
         EditText field = input(hint, !url);
         if (url) field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         else field.setMinLines(4);
@@ -2872,7 +2878,7 @@ final class ReaderSection {
         box.setPadding(dp(21), dp(8), dp(21), dp(3));
         box.addView(field, lp(M, W));
         AlertDialog dialog = showDialog(new AlertDialog.Builder(host)
-                .setTitle(url ? "从链接导入" : pasteLabel)
+                .setTitle(url ? "从链接导入" : "粘贴规则")
                 .setView(box).setNegativeButton("取消", null).setPositiveButton("预览", null));
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(button -> {
             String value = field.getText().toString().trim();

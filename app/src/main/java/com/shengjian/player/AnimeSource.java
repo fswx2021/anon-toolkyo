@@ -94,12 +94,12 @@ final class AnimeSource {
         version = field(rule, "version");
         baseUrl = web(field(rule, "baseURL")).toASCIIString();
         String kind = field(rule, "type");
-        if (!kind.isEmpty() && !kind.equalsIgnoreCase("anime")) throw new IOException("这不是 Kazumi 动画源");
+        if (!kind.isEmpty() && !kind.equalsIgnoreCase("anime")) throw new IOException("此源不属于动画");
         String api = field(rule, "api");
         if (!api.isEmpty()) {
             try {
-                if (Integer.parseInt(api) > 9) throw new IOException("该规则需要更新版本的 Kazumi API");
-            } catch (NumberFormatException invalid) { throw new IOException("Kazumi API 级别无效"); }
+                if (Integer.parseInt(api) > 9) throw new IOException("此源需要更新版本的应用");
+            } catch (NumberFormatException invalid) { throw new IOException("此源的兼容性版本无效"); }
         }
         useWebview = rule.optBoolean("useWebview", true);
         useNativePlayer = rule.optBoolean("useNativePlayer", true);
@@ -256,7 +256,7 @@ final class AnimeSource {
                     if (start >= 0) addShare(batch, value.substring(start, links.start()));
                     start = links.end();
                 }
-                if (start < 0) throw new IOException("请选择 Kazumi 的 JSON 规则或粘贴 kazumi:// 分享链接");
+                if (start < 0) throw new IOException("请选择源的 JSON 文件或粘贴源的分享链接");
                 addShare(batch, value.substring(start));
             }
             return apply(batch);
@@ -315,11 +315,11 @@ final class AnimeSource {
                 ArchiveRules bundled = null;
                 String archiveIssue = "";
                 if (archive != null) {
-                    updates.accept("正在读取 Kazumi 官方规则包…");
-                    try { bundled = boundedRequest(queue, archive, AnimeSource::readArchive, "Kazumi 官方规则包"); }
+                    updates.accept("正在读取源合集…");
+                    try { bundled = boundedRequest(queue, archive, AnimeSource::readArchive, "源合集"); }
                     catch (IOException unavailable) {
                         checkImportCancellation();
-                        archiveIssue = "官方规则包暂未读到 · 已改读规则目录";
+                        archiveIssue = "源合集暂未读到，正在读取源目录";
                     }
                 }
 
@@ -328,13 +328,13 @@ final class AnimeSource {
                 boolean mirrored = false;
                 if (bundled != null) metadata = bundled.metadata;
                 else {
-                    updates.accept(pinned ? "正在读取 Kazumi 官方规则目录…" : "正在读取 Kazumi 规则目录…");
+                    updates.accept("正在读取源目录…");
                     IndexDocument index;
                     try { index = indexDocument(queue, primary, pinned, mirror != null); }
                     catch (IOException unavailable) {
                         checkImportCancellation();
                         if (mirror == null) throw unavailable;
-                        updates.accept("主站目录暂未读到，正在尝试 Kazumi 官方镜像…");
+                        updates.accept("主站目录暂未读到，正在尝试源镜像…");
                         index = indexDocument(queue, mirror, pinned, true);
                         mirrored = true;
                     }
@@ -343,9 +343,9 @@ final class AnimeSource {
                 }
                 RepositoryBatch downloaded = readRepository(queue, resolved, metadata, updates,
                         bundled, mirrored ? null : mirror, pinned);
-                if (bundled != null) downloaded.note("从 Kazumi 官方规则包读取发布目录");
+                if (bundled != null) downloaded.note("已从源合集读取目录");
                 if (!archiveIssue.isEmpty()) downloaded.note(archiveIssue);
-                if (mirrored) downloaded.note("从 Kazumi 官方镜像读取规则目录");
+                if (mirrored) downloaded.note("已从镜像读取源目录");
                 checkImportCancellation();
                 updates.accept("正在合并已读取的动画源…");
                 ImportResult merged = apply(downloaded.toImportBatch(), identity, true, enableForStartup);
@@ -537,13 +537,13 @@ final class AnimeSource {
     private static IndexDocument indexDocument(ReaderSearchQueue workers, URI address, boolean pinned,
                                                boolean requireEntries) throws IOException {
         ReaderSources.Response response = boundedRequest(workers, address,
-                url -> ReaderSources.fetch(url.toASCIIString(), Collections.emptyMap()), "Kazumi 规则目录");
+                url -> ReaderSources.fetch(url.toASCIIString(), Collections.emptyMap()), "源目录");
         URI resolved = web(response.url);
-        if (pinned && !sameEndpoint(address, resolved)) throw new IOException("Kazumi 官方目录重定向到了其他地址");
+        if (pinned && !sameEndpoint(address, resolved)) throw new IOException("源目录重定向到了其他地址");
         Object content = parse(response.body);
-        if (!(content instanceof JSONArray)) throw new IOException("Kazumi 仓库目录应为 JSON 数组");
+        if (!(content instanceof JSONArray)) throw new IOException("源目录应为 JSON 数组");
         JSONArray metadata = (JSONArray) content;
-        if (requireEntries && !hasRepositoryEntry(metadata)) throw new IOException("Kazumi 规则目录没有有效条目");
+        if (requireEntries && !hasRepositoryEntry(metadata)) throw new IOException("源目录没有有效条目");
         return new IndexDocument(resolved, metadata);
     }
 
@@ -677,7 +677,7 @@ final class AnimeSource {
         if (mirror != null && System.nanoTime() < deadline) {
             missing = missingRules(requested, completed);
             if (!missing.isEmpty()) {
-                progress.accept("正在从 Kazumi 官方镜像重试 " + missing.size() + " 条…");
+                progress.accept("正在从镜像重试 " + missing.size() + " 个源…");
                 fetchRepositoryRules(workers, mirror, missing, versions, completed, deadline, pinned, progress);
                 int recovered = missing.size() - missingRules(requested, completed).size();
                 if (recovered > 0) result.note("官方镜像补读 " + recovered + " 条规则");
@@ -804,7 +804,7 @@ final class AnimeSource {
             String decoded = URLDecoder.decode(body.replace("+", "%2B"), "UTF-8").replaceAll("\\s", "");
             byte[] bytes = Base64.getDecoder().decode(decoded.replace('-', '+').replace('_', '/'));
             addJson(batch, parse(decode(bytes)));
-        } catch (IOException | IllegalArgumentException invalid) { batch.reject(1, "Kazumi 分享链接无法解码"); }
+        } catch (IOException | IllegalArgumentException invalid) { batch.reject(1, "源的分享链接无法解码"); }
     }
 
     private static void addJson(ImportBatch batch, Object document) {

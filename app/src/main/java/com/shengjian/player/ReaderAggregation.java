@@ -28,6 +28,7 @@ final class ReaderAggregation {
     private static final String YCK_RECENT_NOVELS = YCK + "yuedu/shuyuans/content/id/1333.html";
     private static final String XIU2 = AOAOSTAR + "71e56d4f.json";
     private static final String AOAOSTAR_ALL = AOAOSTAR + "b778fe6b.json";
+    private static final Publisher NEW_MANGA_SOURCE = new Publisher("源仓库", PpcatStore.FEED_URL);
     private static final ReentrantLock RUN_LOCK = new ReentrantLock();
 
     static final class Publisher {
@@ -82,23 +83,24 @@ final class ReaderAggregation {
     private static List<Publisher> publishers(int kind) {
         if (kind == ReaderSources.COMIC) {
             return Arrays.asList(
-                    new Publisher("异次元图源合集", "yiciyuan/tuyuans", 1, 10, false,
+                    NEW_MANGA_SOURCE,
+                    new Publisher("源合集", "yiciyuan/tuyuans", 1, 10, false,
                             YCK + "yiciyuan/tuyuans/content/id/60.html"),
-                    new Publisher("异次元单图源目录", "yiciyuan/tuyuan", 10, 0, true),
-                    new Publisher("阅读源仓库 · 漫画", YCK_RECENT_NOVELS),
-                    new Publisher("LuAnMuC · 漫画", LUANMUC),
-                    new Publisher("AOAOSTAR · 漫画", AOAOSTAR_ALL));
+                    new Publisher("单源目录", "yiciyuan/tuyuan", 10, 0, true),
+                    new Publisher("近期源合集", YCK_RECENT_NOVELS),
+                    new Publisher("补充源合集", LUANMUC),
+                    new Publisher("全量源合集", AOAOSTAR_ALL));
         }
         return Arrays.asList(
-                new Publisher("AOAOSTAR · 精选", XIU2, AOAOSTAR + "e3e5d620.json",
+                new Publisher("精选源合集", XIU2, AOAOSTAR + "e3e5d620.json",
                         AOAOSTAR + "4dc410d1.json"),
-                new Publisher("阅读源仓库 · 近期合集", "yuedu/shuyuans", 1, 5, false,
+                new Publisher("近期源合集", "yuedu/shuyuans", 1, 5, false,
                         YCK_RECENT_NOVELS),
-                new Publisher("LuAnMuC", LUANMUC),
-                new Publisher("AOAOSTAR · 全量", AOAOSTAR_ALL),
-                new Publisher("cjj200011222",
+                new Publisher("源仓库", LUANMUC),
+                new Publisher("全量源合集", AOAOSTAR_ALL),
+                new Publisher("补充源合集 1",
                         "https://raw.githubusercontent.com/cjj200011222/legado-booksource/master/all.json"),
-                new Publisher("speauty",
+                new Publisher("补充源合集 2",
                         "https://raw.githubusercontent.com/speauty/legado.sources/main/subscriptions/active.json"));
     }
 
@@ -106,8 +108,21 @@ final class ReaderAggregation {
         return run(sources, kind, progress, publishers(kind));
     }
 
+    static Result runNewMangaSource(ReaderSources sources, Consumer<String> progress) throws IOException {
+        Result result = run(sources, ReaderSources.COMIC, progress, List.of(NEW_MANGA_SOURCE), true);
+        if (sources.hasNewMangaSource() || result.reports.isEmpty()) return result;
+        if (result.limited) throw new IOException("已达到源数量上限，请先移除不用的源");
+        Report report = result.reports.get(0);
+        throw new IOException(report.success ? "未找到可导入的漫画源" : report.detail);
+    }
+
     static Result run(ReaderSources sources, int kind, Consumer<String> progress,
                       List<Publisher> publishers) throws IOException {
+        return run(sources, kind, progress, publishers, false);
+    }
+
+    private static Result run(ReaderSources sources, int kind, Consumer<String> progress,
+                              List<Publisher> publishers, boolean skipIfReady) throws IOException {
         if (kind != ReaderSources.COMIC && kind != ReaderSources.NOVEL) throw new IOException("未知书源类型");
         Consumer<String> status = progress == null ? ignored -> {} : progress;
         if (!RUN_LOCK.tryLock()) {
@@ -120,6 +135,9 @@ final class ReaderAggregation {
             }
         }
         try {
+            if (skipIfReady && sources.hasNewMangaSource()) {
+                return new Result(sources.addMissing(Collections.emptyList(), kind, 0), Collections.emptyList());
+            }
             return collect(sources, kind, status, publishers);
         } finally {
             RUN_LOCK.unlock();
@@ -139,7 +157,7 @@ final class ReaderAggregation {
         }
         status.accept("正在合并并保存");
         return new Result(sources.addMissing(new ArrayList<>(collector.candidates.values()),
-                kind, collector.skipped), reports);
+                kind, collector.skipped, collector.newMangaSources), reports);
     }
 
     private static Report collectPublisher(ReaderSources sources, int kind, Publisher publisher,
@@ -261,6 +279,7 @@ final class ReaderAggregation {
     private static final class Collector {
         final Set<String> keys = new HashSet<>();
         final Map<String, ReaderSources.Source> candidates = new LinkedHashMap<>();
+        final List<ReaderSources.Source> newMangaSources = new ArrayList<>();
         int skipped;
 
         Collector(List<ReaderSources.Source> existing) {
@@ -269,6 +288,7 @@ final class ReaderAggregation {
 
         void add(ReaderSources.ImportPlan plan) {
             skipped += plan.skipped;
+            if (plan.newMangaArchive) newMangaSources.addAll(plan.sources);
             for (ReaderSources.Source source : plan.sources) {
                 String key = ReaderSources.aggregationKey(source.kind, source.url);
                 if (keys.add(key)) candidates.put(key, source);

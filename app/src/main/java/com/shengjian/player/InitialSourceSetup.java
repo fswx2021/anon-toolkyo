@@ -31,6 +31,8 @@ public final class InitialSourceSetup extends AndroidViewModel {
     private final ExecutorService workers = Executors.newFixedThreadPool(Module.values().length);
     private final EnumMap<Module, Status> status = new EnumMap<>(Module.class);
     private Runnable listener;
+    private Runnable newMangaSourceListener;
+    private Status newMangaSource = new Status("", false, false);
     private boolean cleared;
 
     public InitialSourceSetup(Application app) {
@@ -52,6 +54,37 @@ public final class InitialSourceSetup extends AndroidViewModel {
     }
 
     void listen(Runnable callback) { listener = callback; }
+
+    boolean newMangaSourceAdded() { return readers.hasNewMangaSource(); }
+
+    boolean newMangaSourceWorking() { return newMangaSource.working(); }
+
+    String newMangaSourceMessage() { return newMangaSource.message(); }
+
+    void listenNewMangaSource(Runnable callback) { newMangaSourceListener = callback; }
+
+    void startNewMangaSource() {
+        if (cleared || newMangaSourceWorking() || newMangaSourceAdded()) return;
+        setNewMangaSource(new Status("正在读取新源…", true, false));
+        workers.execute(() -> {
+            try {
+                ReaderAggregation.runNewMangaSource(readers,
+                        message -> publishNewMangaSource(new Status(message, true, false)));
+                publishNewMangaSource(new Status("", false, false));
+            } catch (IOException | RuntimeException unavailable) {
+                publishNewMangaSource(new Status("聚合未完成，请重试。", false, true));
+            }
+        });
+    }
+
+    private void publishNewMangaSource(Status value) {
+        main.post(() -> { if (!cleared) setNewMangaSource(value); });
+    }
+
+    private void setNewMangaSource(Status value) {
+        newMangaSource = value;
+        if (newMangaSourceListener != null) newMangaSourceListener.run();
+    }
 
     boolean started() { return !status.isEmpty(); }
 
@@ -141,6 +174,7 @@ public final class InitialSourceSetup extends AndroidViewModel {
     @Override protected void onCleared() {
         cleared = true;
         listener = null;
+        newMangaSourceListener = null;
         workers.shutdownNow();
         main.removeCallbacksAndMessages(null);
     }

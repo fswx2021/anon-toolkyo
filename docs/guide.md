@@ -38,6 +38,7 @@
 
 | 来源 | 导入方式 |
 | --- | --- |
+| 皮皮喵图源 | 用「一键聚合」读取公开仓库，也可以粘贴仓库链接或选择导出的站点规则文件。启用的皮皮喵源会优先搜索。 [皮皮喵来源仓库](https://github.com/AcgLibrary/ppcat_store) |
 | 异次元图源 | 粘贴图源或合集详情页及其 JSON 地址，也可选择图源文件或压缩合集。 [异次元图源目录](https://www.yckceo.com/yiciyuan/tuyuan/index.html) |
 | 阅读 3.0 | 支持小说和漫画来源 JSON、`legado://import/bookSource?src=…` 链接，以及包含书源的阅读备份 ZIP。 [阅读项目](https://github.com/gedoor/legado) |
 | 本地作品 | 小说可导入 TXT、EPUB，漫画可导入 CBZ、ZIP 或图片目录。 |
@@ -47,6 +48,7 @@
 <details>
 <summary>查看规则兼容范围</summary>
 
+- 皮皮喵支持仓库规则包，以及新版规则中的常见 CSS、JSONPath、分页变量、GET/POST 和基础 JavaScript。依赖原 App 专用脚本接口的来源仍需单独适配。
 - 异次元支持常见 CSS、JSONPath、分页变量、图片请求头、部分旧导出的转义脚本与 JavaScript。明确依赖加密目录或图片规则的来源会在聚合时跳过。
 - 阅读 3.0 的小说类型为 `bookSourceType: 0`，漫画类型为 `bookSourceType: 2`。支持常见 CSS、简单 XPath、JSONPath、正则捕获、GET/POST、内联 `jsLib` 和部分脚本变量。WebView 可渲染 GET 页面和部分同步页面脚本。浏览器 POST、登录及阅读专用脚本接口需要兼容规则。 [上游规则实现](https://github.com/LegadoTeam/legado/blob/3.26101819/app/src/main/java/io/legado/app/model/analyzeRule/AnalyzeRule.kt)
 - 导入支持 JSON、GZIP 和部分压缩合集。来源按栏目去重，漫画和小说合计最多存储 8,000 条、32 MiB 规则。

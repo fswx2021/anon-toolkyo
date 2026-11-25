@@ -101,7 +101,7 @@ final class YiciyuanRules {
             if (requestHeaders.length() > 0) result.put("header", requestHeaders);
             return withPublicCompatibility(result);
         } catch (JSONException invalid) {
-            throw new IOException("无法读取异次元图源规则", invalid);
+            throw new IOException("无法读取源规则", invalid);
         }
     }
 
@@ -226,10 +226,10 @@ final class YiciyuanRules {
         JSONObject toc = source.optJSONObject("ruleToc");
         JSONObject content = source.optJSONObject("ruleContent");
         if (toc != null && isEncryptedRule(field(toc, "chapterList"))) {
-            return "此异次元图源的章节目录规则已加密";
+            return "此源的章节目录规则已加密";
         }
         if (content != null && isEncryptedRule(field(content, "content"))) {
-            return "此异次元图源的图片提取规则已加密";
+            return "此源的图片提取规则已加密";
         }
         return "";
     }
