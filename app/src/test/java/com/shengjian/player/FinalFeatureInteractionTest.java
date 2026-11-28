@@ -169,7 +169,7 @@ public class FinalFeatureInteractionTest {
     private static AppUpdates.Release availableUpdate() {
         URI apk = URI.create("https://github.com/owner/anon-toolkyo/releases/download/v0.30.1/anon-toolkyo-0.30.1.apk");
         return new AppUpdates.Release(BuildConfig.VERSION_CODE + 1, "0.30.1", apk,
-                "版本更新说明", "a".repeat(64), List.of(apk));
+                "- 修复漫画源聚合\n- 支持全选章节下载", "a".repeat(64), List.of(apk));
     }
 
     @Test public void aboutOffersInAppInstallationAndOpensTheReleaseWebsite() throws Exception {
@@ -183,7 +183,8 @@ public class FinalFeatureInteractionTest {
             View about = ShadowDialog.getLatestDialog().getWindow().getDecorView();
             assertTrue(label(about, "查看 0.30.1 更新").performClick());
             View update = ShadowDialog.getLatestDialog().getWindow().getDecorView();
-            assertNotNull(label(update, "版本更新说明"));
+            assertNotNull(label(update, "更新日志"));
+            assertNotNull(label(update, "- 修复漫画源聚合\n- 支持全选章节下载"));
             assertNotNull(label(update, "应用内下载并安装"));
             assertTrue(label(update, "去网站下载").performClick());
             Intent next = shadowOf(host).getNextStartedActivity();
@@ -211,7 +212,8 @@ public class FinalFeatureInteractionTest {
             controller.windowFocusChanged(true);
             assertNotNull(sheet.get(host));
             View update = ShadowDialog.getLatestDialog().getWindow().getDecorView();
-            assertNotNull(label(update, "版本更新说明"));
+            assertNotNull(label(update, "更新日志"));
+            assertNotNull(label(update, "- 修复漫画源聚合\n- 支持全选章节下载"));
             assertTrue(label(update, "稍后").performClick());
             shadowOf(Looper.getMainLooper()).idle();
 

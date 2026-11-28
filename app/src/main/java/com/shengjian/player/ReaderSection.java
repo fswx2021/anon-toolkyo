@@ -3903,22 +3903,39 @@ final class ReaderSection {
 
     private void chooseChapterDownloads() {
         List<ReaderEngine.Chapter> available = new ArrayList<>(chapters);
+        if (available.isEmpty()) return;
         String[] labels = new String[available.size()];
-        boolean[] checked = new boolean[available.size()];
         for (int i = 0; i < labels.length; i++) labels[i] = available.get(i).title;
-        showDialog(new AlertDialog.Builder(host).setTitle("选择要下载的章节")
-                .setMultiChoiceItems(labels, checked, (dialog, index, on) -> checked[index] = on)
-                .setNegativeButton("取消", null).setPositiveButton("下载所选", (dialog, which) -> {
-                    int count = 0;
-                    for (boolean selected : checked) if (selected) count++;
-                    if (count == 0) return;
-                    if (count > 50) { toast("每批最多下载 50 章，请缩小选择范围"); return; }
-                    showDownloads();
-                    for (int i = 0; i < checked.length; i++) {
-                        if (checked[i]) enqueueDownload(available.get(i), null);
-                    }
-                    persistDownloadTasks();
-                }));
+        AlertDialog dialog = showDialog(new AlertDialog.Builder(host).setTitle("选择要下载的章节")
+                .setMultiChoiceItems(labels, null, null)
+                .setNeutralButton("全选", null)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("下载所选", null));
+        ListView list = dialog.getListView();
+        TextView selectAll = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        TextView submit = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        Runnable updateSelection = () -> {
+            int count = list.getCheckedItemCount();
+            selectAll.setText(count == available.size() ? "取消全选" : "全选");
+            submit.setText(count == 0 ? "下载所选" : "下载 " + count + " 章");
+            submit.setEnabled(count > 0);
+        };
+        list.setOnItemClickListener((parent, row, position, id) -> updateSelection.run());
+        selectAll.setOnClickListener(view -> {
+            boolean select = list.getCheckedItemCount() < available.size();
+            for (int i = 0; i < available.size(); i++) list.setItemChecked(i, select);
+            updateSelection.run();
+        });
+        submit.setOnClickListener(view -> {
+            if (list.getCheckedItemCount() == 0) return;
+            for (int i = 0; i < available.size(); i++) {
+                if (list.isItemChecked(i)) enqueueDownload(available.get(i), null);
+            }
+            persistDownloadTasks();
+            dialog.dismiss();
+            showDownloads();
+        });
+        updateSelection.run();
     }
 
     private void removeLocalBook() {
@@ -3956,17 +3973,19 @@ final class ReaderSection {
     }
 
     private void downloadChapter(ReaderEngine.Chapter chapter, ReaderEngine.Page page) {
-        enqueueDownload(chapter, page);
+        if (!enqueueDownload(chapter, page)) return;
         persistDownloadTasks();
+        refreshDownloadStatus();
+        if (screen != Screen.DOWNLOADS) toast("已加入下载队列");
     }
 
-    private void enqueueDownload(ReaderEngine.Chapter chapter, ReaderEngine.Page page) {
+    private boolean enqueueDownload(ReaderEngine.Chapter chapter, ReaderEngine.Page page) {
         String job = downloadKey(chapter);
         DownloadTask previous = downloadJobs.get(job);
-        if (previous != null && previous.active()) return;
+        if (previous != null && previous.active()) return false;
         if (page == null && sources.find(chapter.book.source.id) == null) {
             toast("来源已移除，重新导入来源后再重试");
-            return;
+            return false;
         }
         DownloadTask task = new DownloadTask(chapter);
         downloadJobs.put(job, task);
@@ -3990,8 +4009,7 @@ final class ReaderSection {
                 main.post(() -> finishDownload(task, "缓存失败 · " + problem(error)));
             }
         });
-        refreshDownloadStatus();
-        if (screen != Screen.DOWNLOADS) toast("已加入下载队列");
+        return true;
     }
 
     private void removeOffline(ReaderEngine.Chapter chapter) {

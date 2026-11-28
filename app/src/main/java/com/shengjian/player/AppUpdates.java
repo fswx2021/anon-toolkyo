@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 final class AppUpdates {
     private static final int RELEASE_LIMIT = 256 * 1024;
     private static final int MANIFEST_LIMIT = 32 * 1024;
+    private static final int NOTES_LIMIT = 6_000;
     private static final int TIMEOUT_MS = 8_000;
     private static final String MANIFEST = "update.json";
     private static final String LATEST_MANIFEST_PATH = "/releases/latest/download/" + MANIFEST;
@@ -133,7 +134,7 @@ final class AppUpdates {
             try {
                 Response response = fetch.get(mirrorBase.resolve(MANIFEST), MANIFEST_LIMIT, true);
                 if (response != null) {
-                    Release mirror = parseManifest(response.body(), null, "", Channel.MIRROR, 0);
+                    Release mirror = parseManifest(response.body(), null, "", Channel.MIRROR, 0, "");
                     if (mirror.newerThan(installedVersionCode)) return mirror;
                     if (available == null || mirror.newerThan(available.versionCode())) available = mirror;
                 }
@@ -186,7 +187,7 @@ final class AppUpdates {
         if (asset(assets, MANIFEST) == null || asset(assets, apkName(version)) == null) return null;
         Response manifest = fetch.get(giteeAsset(tag, MANIFEST), MANIFEST_LIMIT, true);
         if (manifest == null) throw invalidRelease();
-        return parseManifest(manifest.body(), version, "", Channel.GITEE, 0);
+        return parseManifest(manifest.body(), version, "", Channel.GITEE, 0, release.opt("body"));
     }
 
     private URI giteeAsset(String tag, String filename) {
@@ -223,25 +224,27 @@ final class AppUpdates {
             URI manifest = assetUrl(manifestAsset.getString("browser_download_url"), tag, MANIFEST);
             assetUrl(apkAsset.getString("browser_download_url"), tag, apkName);
             return fetchGithubManifest(manifest, manifestAsset.optLong("id"), versionName,
-                    apkAsset.optString("digest", ""), apkAsset.optLong("id"));
+                    apkAsset.optString("digest", ""), apkAsset.optLong("id"), release.opt("body"));
         } catch (JSONException malformed) {
             throw invalidRelease();
         }
     }
 
     private Release fetchGithubManifest(URI browserUrl, long manifestAssetId, String version,
-                                        String digest, long apkAssetId) throws IOException {
+                                        String digest, long apkAssetId, Object releaseBody) throws IOException {
         if (manifestAssetId > 0) {
             try {
                 Response response = fetch.get(githubAssetApi(manifestAssetId), MANIFEST_LIMIT, true);
-                if (response != null) return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId);
+                if (response != null) {
+                    return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId, releaseBody);
+                }
             } catch (IOException unavailable) {
                 if (Thread.currentThread().isInterrupted()) throw unavailable;
             }
         }
         Response response = fetch.get(browserUrl, MANIFEST_LIMIT, true);
         if (response == null) throw invalidRelease();
-        return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId);
+        return parseManifest(response.body(), version, digest, Channel.GITHUB, apkAssetId, releaseBody);
     }
 
     private URI githubAssetApi(long assetId) {
@@ -252,11 +255,11 @@ final class AppUpdates {
         URI address = URI.create("https://github.com/" + repository + LATEST_MANIFEST_PATH);
         Response response = fetch.get(address, MANIFEST_LIMIT, true);
         if (response == null) return null;
-        return parseManifest(response.body(), response.versionFromRedirect(), "", Channel.GITHUB, 0);
+        return parseManifest(response.body(), response.versionFromRedirect(), "", Channel.GITHUB, 0, "");
     }
 
     private Release parseManifest(String body, String expectedVersion, String registeredDigest,
-                                  Channel channel, long githubAssetId) throws IOException {
+                                  Channel channel, long githubAssetId, Object releaseBody) throws IOException {
         try {
             JSONObject descriptor = new JSONObject(body);
             Object number = descriptor.get("versionCode");
@@ -289,8 +292,8 @@ final class AppUpdates {
                         && !("sha256:" + sha256).equalsIgnoreCase(registeredDigest))) {
                 throw invalidRelease();
             }
-            String notes = descriptor.optString("notes", "").trim();
-            if (notes.length() > 6_000) notes = notes.substring(0, 5_999) + "…";
+            String notes = normalizeNotes(descriptor.opt("notes"));
+            if (notes.isEmpty()) notes = normalizeNotes(releaseBody);
             List<URI> routes = new ArrayList<>();
             if (githubAssetId > 0) routes.add(githubAssetApi(githubAssetId));
             routes.add(apk);
@@ -303,6 +306,15 @@ final class AppUpdates {
         } catch (JSONException malformed) {
             throw invalidRelease();
         }
+    }
+
+    private static String normalizeNotes(Object value) {
+        if (!(value instanceof String text)) return "";
+        String notes = text.replace("\r\n", "\n").replace('\r', '\n').strip();
+        if (notes.length() <= NOTES_LIMIT) return notes;
+        int end = NOTES_LIMIT - 1;
+        if (Character.isHighSurrogate(notes.charAt(end - 1))) end--;
+        return notes.substring(0, end) + "…";
     }
 
     private static JSONObject asset(JSONArray assets, String name) {

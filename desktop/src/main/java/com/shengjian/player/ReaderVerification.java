@@ -13,6 +13,10 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.SocketAddress;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -87,6 +91,7 @@ public final class ReaderVerification {
             ReaderUrlVerification.verify(working.resolve("request-rules.json"));
             ReaderYiciyuanVerification.verify(working.resolve("manga-legacy-rules.json"));
             verifyPpcat(working.resolve("ppcat-rules.json"));
+            verifyBundledMangaFallback(working.resolve("bundled-manga.json"));
             verifyAggregation(working.resolve("aggregated.json"));
             verifySourceDeduplication(working.resolve("unique-names.json"), working.resolve("legacy-aliases.json"));
             verifySearchQueue();
@@ -164,6 +169,60 @@ public final class ReaderVerification {
             System.out.println("PASS PPCat export, JSON POST, scripts, detail, chapters and images");
         } finally {
             server.stop(0);
+        }
+    }
+
+    private static void verifyBundledMangaFallback(Path catalog) throws IOException {
+        ProxySelector previous = ProxySelector.getDefault();
+        String primaryHost = URI.create(PpcatStore.FEED_URL).getHost();
+        String mirrorHost = URI.create(PpcatStore.MIRROR_URL).getHost();
+        List<Proxy> offline = List.of(new Proxy(Proxy.Type.HTTP, new InetSocketAddress("127.0.0.1", 0)));
+        AtomicInteger primaryAttempts = new AtomicInteger();
+        AtomicInteger mirrorAttempts = new AtomicInteger();
+        ProxySelector.setDefault(new ProxySelector() {
+            @Override public List<Proxy> select(URI destination) {
+                if (primaryHost.equalsIgnoreCase(destination.getHost())) {
+                    primaryAttempts.incrementAndGet();
+                    return offline;
+                }
+                if (mirrorHost.equalsIgnoreCase(destination.getHost())) {
+                    mirrorAttempts.incrementAndGet();
+                    return offline;
+                }
+                return previous == null ? List.of(Proxy.NO_PROXY) : previous.select(destination);
+            }
+
+            @Override public void connectFailed(URI destination, SocketAddress proxy, IOException error) {
+                if (previous != null && !primaryHost.equalsIgnoreCase(destination.getHost())
+                        && !mirrorHost.equalsIgnoreCase(destination.getHost())) {
+                    previous.connectFailed(destination, proxy, error);
+                }
+            }
+        });
+        try {
+            ReaderSources sources = new ReaderSources(catalog.toFile(), ReaderVerification::resource);
+            ReaderSources.ImportPlan plan = sources.prepareAggregateUrl(PpcatStore.FEED_URL, ReaderSources.COMIC);
+            require(plan.bundledMangaArchive && plan.newMangaArchive && plan.sources.size() > 380
+                    && !Files.exists(catalog), "bundled manga preview after the primary connection fails");
+
+            ReaderAggregation.Result first = ReaderAggregation.runNewMangaSource(sources, null);
+            require(first.changes.added > 380 && first.newlyEnabled == first.changes.added
+                    && first.reports.size() == 1 && first.reports.get(0).success
+                    && first.reports.get(0).detail.contains("包内备用规则"), "offline aggregate reports the bundled manga source");
+            require(primaryAttempts.get() > 0 && mirrorAttempts.get() == 0,
+                    "valid bundled rules are used before contacting the mirror");
+
+            int attempts = primaryAttempts.get();
+            ReaderSources reopened = new ReaderSources(catalog.toFile(), ReaderVerification::resource);
+            require(reopened.hasNewMangaSource() && reopened.list(ReaderSources.COMIC).size() == first.changes.added,
+                    "offline manga aggregation is persisted");
+            ReaderAggregation.Result repeat = ReaderAggregation.runNewMangaSource(reopened, null);
+            require(repeat.changes.added == 0 && repeat.reports.isEmpty() && primaryAttempts.get() == attempts,
+                    "completed aggregation skips the network after reopening");
+            System.out.println("PASS bundled manga fallback with the primary connection blocked and persistent completion: "
+                    + first.changes.added + " imported and enabled");
+        } finally {
+            ProxySelector.setDefault(previous);
         }
     }
 
@@ -350,6 +409,8 @@ public final class ReaderVerification {
         server.createContext("/first.json", exchange -> reply(exchange, primary.toString(), "application/json"));
         server.createContext("/duplicate.json", exchange -> reply(exchange,
                 new JSONArray().put(sameNovel).put(nameDuplicate).put(existingName).toString(), "application/json"));
+        server.createContext("/only-manga.json", exchange -> reply(exchange,
+                new JSONArray().put(manga).toString(), "application/json"));
         server.createContext("/unavailable.json", exchange -> {
             try (exchange) {
                 exchange.sendResponseHeaders(503, -1);
@@ -362,6 +423,7 @@ public final class ReaderVerification {
             List<ReaderAggregation.Publisher> publishers = List.of(
                     new ReaderAggregation.Publisher("本地合集", base + "/first.json"),
                     new ReaderAggregation.Publisher("本地重复合集", base + "/duplicate.json"),
+                    new ReaderAggregation.Publisher("只有漫画", base + "/only-manga.json"),
                     new ReaderAggregation.Publisher("暂时不可用", base + "/unavailable.json"));
             ReaderAggregation.Result result = ReaderAggregation.run(store, ReaderSources.NOVEL, text -> {}, publishers);
             require(result.changes.added == novelCount && result.changes.updated == 0
@@ -370,7 +432,9 @@ public final class ReaderVerification {
                     "novel aggregation filters kind, deduplicates, and enables every new source");
             require(result.reports.stream().anyMatch(report -> report.name.equals("本地合集") && report.success)
                     && result.reports.stream().anyMatch(report -> report.name.equals("暂时不可用") && !report.success
-                    && !report.detail.isBlank()), "one publisher failure preserves successful imports");
+                    && report.detail.contains("HTTP 503")), "HTTP status is reported and other sources still import");
+            require(result.reports.stream().anyMatch(report -> report.name.equals("只有漫画") && !report.success
+                    && report.detail.contains("本栏目没有可导入的源")), "reachable repository without matching rules is reported separately");
             ReaderAggregation.Result comics = ReaderAggregation.run(store, ReaderSources.COMIC, null, publishers);
             require(comics.changes.added == 1 && comics.newlyEnabled == 1 && !comics.limited,
                     "manga aggregation selects the other kind and enables the new source");

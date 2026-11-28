@@ -77,6 +77,15 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def checked_release_notes(notes):
+    if not isinstance(notes, str):
+        raise ValueError("Release notes must be text.")
+    notes = notes.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not notes or len(notes.encode("utf-16-le")) > 4_000:
+        raise ValueError("Release notes must contain 1 to 2000 UTF-16 code units.")
+    return notes
+
+
 class GitHubRelease:
     def __init__(self, repository, cwd):
         self.token = credential(repository, cwd)
@@ -146,6 +155,7 @@ class GitHubRelease:
                                 })
 
     def create_draft(self, tag, title, notes, paths):
+        notes = checked_release_notes(notes)
         draft = self.find_release(tag)
         if draft is None:
             draft = self.api("/releases", {"tag_name": tag, "name": title, "body": notes, "draft": True})

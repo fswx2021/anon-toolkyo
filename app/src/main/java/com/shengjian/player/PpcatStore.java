@@ -19,6 +19,7 @@ final class PpcatStore {
     static final String FEED_URL = "https://raw.githubusercontent.com/AcgLibrary/ppcat_store/master/store";
     static final String MIRROR_URL =
             "https://cdn.jsdelivr.net/gh/AcgLibrary/ppcat_store@3b1d56d9cca6246995fe7a8d8e82281707fc72cf/store";
+    static final String BUNDLED_ASSET = "reader-sources/ppcat-archive.json";
     private static final String MIRROR_SHA256 = "DmnSNUBmZKLwJdpwido2qgFAQ8E3RSa3wzjzVbWNDq0=";
     private static final int ZIP_END = 0x06054b50;
     private static final int ZIP_DIRECTORY = 0x02014b50;

@@ -41,7 +41,8 @@ public class AppUpdatesTest {
 
     @Test public void usesPinnedReleaseAssetsAndOrdersUpdatesByVersionCode() throws Exception {
         List<String> calls = new ArrayList<>();
-        String release = release(ASSETS + "update.json", false, DIGEST);
+        String release = new JSONObject(release(ASSETS + "update.json", false, DIGEST))
+                .put("body", "发行页的附加说明").toString();
         String manifest = manifest(APK, 70);
         AppUpdates updates = new AppUpdates(REPO, (address, limit, asset) -> {
             calls.add(address.toString());
@@ -59,6 +60,32 @@ public class AppUpdatesTest {
         assertTrue(latest.newerThan(69));
         assertFalse(latest.newerThan(70));
         assertFalse(latest.newerThan(71));
+    }
+
+    @Test public void usesTheMatchingReleaseBodyWhenTheManifestHasNoNotes() throws Exception {
+        String release = new JSONObject(release(ASSETS + "update.json", false, DIGEST))
+                .put("body", "\r\n- 修复漫画搜索\r\n- 优化章节下载\r\n").toString();
+        JSONObject descriptor = new JSONObject(manifest(APK, 70));
+        descriptor.remove("notes");
+        assertEquals("- 修复漫画搜索\n- 优化章节下载", catalog(release, descriptor.toString()).latest().notes());
+
+        descriptor.put("notes", " \n　\n");
+        AppUpdates domestic = new AppUpdates(REPO, "", GITEE_REPO, (address, limit, asset) -> {
+            if (address.toString().equals(GITEE_API)) return response(release);
+            assertEquals(GITEE_ASSETS + "update.json", address.toString());
+            return response(descriptor.toString());
+        });
+        assertEquals("- 修复漫画搜索\n- 优化章节下载", domestic.latest(69).notes());
+    }
+
+    @Test public void doesNotShowNonTextNotesAndTruncatesLongReleaseBodiesAtACharacterBoundary() throws Exception {
+        JSONObject descriptor = new JSONObject(manifest(APK, 70)).put("notes", new JSONArray().put("wrong type"));
+        JSONObject release = new JSONObject(release(ASSETS + "update.json", false, DIGEST));
+        assertEquals("", catalog(release.toString(), descriptor.toString()).latest().notes());
+
+        String prefix = "条".repeat(5_998);
+        release.put("body", prefix + "🎵后续更新");
+        assertEquals(prefix + "…", catalog(release.toString(), descriptor.toString()).latest().notes());
     }
 
     @Test public void rejectsForeignManifestBeforeCallingItsUrl() throws Exception {

@@ -13,7 +13,7 @@ from uuid import uuid4
 from xml.etree import ElementTree
 import zipfile
 
-from github_release import GitHubRelease, sha256
+from github_release import GitHubRelease, checked_release_notes, sha256
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +192,7 @@ def verify(apk, previous, tools, env, version, code, repository, mirror):
 
 
 def assemble_assets(apk, repository, version, code, notes):
+    notes = checked_release_notes(notes)
     tag = f"v{version}"
     apk_name = f"anon-toolkyo-{version}.apk"
     parent = ROOT / "build/releases"
@@ -290,9 +291,10 @@ def main():
     mirror = mirror_base(args.mirror_base)
     version, code = config_version()
     path = args.notes_file or ROOT / f"tools/releases/{version}.md"
-    notes = path.read_text(encoding="utf-8-sig").strip()
-    if not notes or len(notes.encode("utf-16-le")) > 4000:
-        parser.error("--notes-file must contain 1 to 2000 UTF-16 code units")
+    try:
+        notes = checked_release_notes(path.read_text(encoding="utf-8-sig"))
+    except ValueError as error:
+        parser.error(f"{path}: {error}")
     github = check_draft_source(repository, f"v{version}") if args.create_draft else None
     env = build_environment(repository, mirror, gitee_repository)
     tools = build_tools(args.build_tools, env)

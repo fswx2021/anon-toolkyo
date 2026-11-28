@@ -274,15 +274,19 @@ final class ReaderSources {
         }
     }
 
+    private enum MangaArchive { NONE, PACKED, BUNDLED }
+
     static final class ImportPlan extends ImportResult {
         final int encrypted;
         final boolean newMangaArchive;
+        final boolean bundledMangaArchive;
 
         private ImportPlan(int added, int updated, int skipped, List<Source> sources, List<String> diagnostics,
-                           int encrypted, boolean newMangaArchive) {
+                           int encrypted, MangaArchive archive) {
             super(added, updated, skipped, sources, diagnostics);
             this.encrypted = encrypted;
-            this.newMangaArchive = newMangaArchive;
+            newMangaArchive = archive != MangaArchive.NONE;
+            bundledMangaArchive = archive == MangaArchive.BUNDLED;
         }
     }
 
@@ -324,12 +328,14 @@ final class ReaderSources {
 
     private final File catalog;
     private final Path newMangaMarker;
+    private final SampleOpener assetOpener;
     private final boolean readable;
     private volatile CatalogView view;
     private volatile boolean newMangaAggregated;
 
     ReaderSources(File catalogFile, SampleOpener sampleOpener) {
         catalog = catalogFile.getAbsoluteFile();
+        assetOpener = sampleOpener;
         newMangaMarker = catalog.toPath().resolveSibling(catalog.getName() + ".new-manga-source");
         try {
             newMangaAggregated = Files.isRegularFile(newMangaMarker);
@@ -423,14 +429,25 @@ final class ReaderSources {
         try {
             Download data = download(address, Collections.emptyMap(), null, limit);
             ImportPlan plan = preparePayload(data.bytes, data.type, kind, limit, manual);
-            if (ppcat && !plan.newMangaArchive) throw new IOException("源仓库返回了不受支持的格式");
-            return plan;
+            return ppcat ? requireMangaArchive(plan) : plan;
         } catch (IOException primary) {
             if (!ppcat || Thread.currentThread().isInterrupted()) throw primary;
+            if (assetOpener != null) {
+                try (InputStream snapshot = assetOpener.open(PpcatStore.BUNDLED_ASSET)) {
+                    if (snapshot != null) {
+                        String json = decode(read(snapshot, limit), "", "");
+                        return requireMangaArchive(prepareRows(sourceArray(json, kind, limit),
+                                kind, manual, MangaArchive.BUNDLED));
+                    }
+                } catch (IOException unavailable) {
+                    if (Thread.currentThread().isInterrupted()) throw unavailable;
+                    primary.addSuppressed(unavailable);
+                }
+            }
             try {
                 Download mirror = download(PpcatStore.MIRROR_URL, Collections.emptyMap(), null, limit);
                 PpcatStore.verifyMirror(mirror.bytes);
-                return preparePayload(mirror.bytes, mirror.type, kind, limit, manual);
+                return requireMangaArchive(preparePayload(mirror.bytes, mirror.type, kind, limit, manual));
             } catch (IOException failed) {
                 failed.addSuppressed(primary);
                 throw failed;
@@ -438,15 +455,21 @@ final class ReaderSources {
         }
     }
 
+    private static ImportPlan requireMangaArchive(ImportPlan plan) throws IOException {
+        if (!plan.newMangaArchive) throw new IOException("源仓库返回了不受支持的格式");
+        if (plan.sources.isEmpty()) throw new IOException("源规则包没有可导入的漫画源");
+        return plan;
+    }
+
     ImportResult importText(String json, int kind) throws IOException {
         return apply(prepareText(json, kind));
     }
 
     ImportPlan prepareText(String json, int kind) throws IOException {
-        return prepareRows(sourceArray(json, kind, SOURCE_LIMIT), kind, true, false);
+        return prepareRows(sourceArray(json, kind, SOURCE_LIMIT), kind, true, MangaArchive.NONE);
     }
 
-    private ImportPlan prepareRows(JSONArray input, int kind, boolean manual, boolean ppcatArchive) throws IOException {
+    private ImportPlan prepareRows(JSONArray input, int kind, boolean manual, MangaArchive archive) throws IOException {
         checkWritable();
         if (kind != NOVEL && kind != COMIC && kind != ALL) {
             throw new IOException("未知书源类型");
@@ -458,6 +481,7 @@ final class ReaderSources {
         List<String> diagnostics = new ArrayList<>();
         int added = 0;
         int encrypted = 0;
+        boolean ppcatArchive = archive != MangaArchive.NONE;
         for (int i = 0; i < input.length(); i++) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("导入已取消");
             JSONObject definition = input.optJSONObject(i);
@@ -541,7 +565,7 @@ final class ReaderSources {
             throw new IOException("已达到书源数量上限，请先移除不用的书源");
         }
         return new ImportPlan(added, imported.size() - added, input.length() - imported.size(),
-                new ArrayList<>(imported.values()), diagnostics, encrypted, ppcatArchive);
+                new ArrayList<>(imported.values()), diagnostics, encrypted, archive);
     }
 
     synchronized ImportResult apply(ImportPlan plan) throws IOException {
@@ -695,7 +719,7 @@ final class ReaderSources {
         if (kind != NOVEL) {
             byte[] ppcat = PpcatStore.unpack(data, limit);
             if (ppcat != null) {
-                return prepareRows(sourceArray(decode(ppcat, "", ""), kind, limit), kind, manual, true);
+                return prepareRows(sourceArray(decode(ppcat, "", ""), kind, limit), kind, manual, MangaArchive.PACKED);
             }
         }
         if (data.length >= 2 && (data[0] & 0xff) == 0x1f && (data[1] & 0xff) == 0x8b) {
@@ -714,9 +738,9 @@ final class ReaderSources {
                     rows.put(entry.opt(i));
                 }
             }
-            return prepareRows(rows, kind, manual, false);
+            return prepareRows(rows, kind, manual, MangaArchive.NONE);
         }
-        return prepareRows(sourceArray(decode(data, type, ""), kind, limit), kind, manual, false);
+        return prepareRows(sourceArray(decode(data, type, ""), kind, limit), kind, manual, MangaArchive.NONE);
     }
 
     private static boolean isZip(byte[] data) {

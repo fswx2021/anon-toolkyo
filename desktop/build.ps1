@@ -21,7 +21,16 @@ $sharedFiles = @('ReaderSources.java', 'ReaderEngine.java', 'ReaderRuleSupport.j
     ForEach-Object { Join-Path $shared $_ }
 $desktopFiles = (Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src/main/java') -Recurse -Filter '*.java').FullName
 $libraries = @(Get-ChildItem -LiteralPath (Join-Path $repo 'app/libs'), (Join-Path $PSScriptRoot 'lib') -Filter '*.jar')
-$classpath = $libraries.FullName -join [IO.Path]::PathSeparator
+$platformPaths = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT, (Join-Path $repo 'build/android-sdk')) |
+    Where-Object { $_ } | ForEach-Object { Join-Path $_ 'platforms' } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+$androidJar = $platformPaths | ForEach-Object { Get-ChildItem -LiteralPath $_ -Directory } |
+    Where-Object { $_.Name -match '^android-\d+$' } |
+    Sort-Object { [int]($_.Name -replace '^android-', '') } -Descending |
+    ForEach-Object { Join-Path $_.FullName 'android.jar' } |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (!$androidJar) { throw 'Android SDK platform not found. Set ANDROID_HOME or install a platform under build/android-sdk.' }
+$classpath = ($libraries.FullName + $androidJar) -join [IO.Path]::PathSeparator
 $build = New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot 'build')
 $stage = New-Item -ItemType Directory -Path (Join-Path $build.FullName ('stage-' + [guid]::NewGuid().ToString('N')))
 $prefix = $stage.FullName + [IO.Path]::DirectorySeparatorChar
@@ -60,6 +69,9 @@ try {
     }
 
     Copy-Item -LiteralPath (Join-Path $repo 'app/src/main/assets/reader-samples') -Destination $stage.FullName -Recurse
+    Copy-Item -LiteralPath (Join-Path $repo 'app/src/main/assets/reader-sources') -Destination $stage.FullName -Recurse
+    $licenses = New-Item -ItemType Directory -Force -Path (Join-Path $stage.FullName 'licenses')
+    Copy-Item -LiteralPath (Join-Path $repo 'app/src/main/assets/licenses/ppcat-store-GPL-3.0.txt') -Destination $licenses.FullName
     $stagedJar = Join-Path $build.FullName ($stage.Name + '.jar')
     & $jarTool --create --file $stagedJar --main-class com.shengjian.player.ReaderWorkbench -C $stage.FullName .
     if ($LASTEXITCODE) { throw 'JAR packaging failed' }

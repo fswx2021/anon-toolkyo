@@ -1,0 +1,9 @@
+AcgLibrary/ppcat_store
+
+包内漫画备用规则 ppcat-archive.json 来自 AcgLibrary 和项目贡献者，按 GNU GPL v3 分发。
+许可证原文见 licenses/ppcat-store-GPL-3.0.txt。
+
+上游源码和原始规则包：
+https://github.com/AcgLibrary/ppcat_store/tree/3b1d56d9cca6246995fe7a8d8e82281707fc72cf
+
+2026-11-28，Anon Toolkyo 解包规则并保留为可直接编辑的 JSON，移除含固定会话或密码的六条规则。修改后的规则源码为本目录的 ppcat-archive.json。

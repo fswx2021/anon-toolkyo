@@ -9,14 +9,21 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ListView;
 import android.widget.RadioButton;
 import android.widget.SeekBar;
+import android.widget.TextView;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -52,6 +59,17 @@ public class ReaderInteractionTest {
         view.measure(View.MeasureSpec.makeMeasureSpec(720, View.MeasureSpec.EXACTLY),
                      View.MeasureSpec.makeMeasureSpec(1100, View.MeasureSpec.EXACTLY));
         view.layout(0,0,720,1100);
+    }
+
+    private static TextView label(View root, String text) {
+        if (root instanceof TextView view && text.contentEquals(view.getText())) return view;
+        if (root instanceof ViewGroup group) {
+            for (int i = 0; i < group.getChildCount(); i++) {
+                TextView match = label(group.getChildAt(i), text);
+                if (match != null) return match;
+            }
+        }
+        return null;
     }
 
     private static void swipe(View view, float fromX, float fromY, float toX, float toY) {
@@ -289,6 +307,91 @@ public class ReaderInteractionTest {
         } finally {
             reader.dispose();
             image.recycle();
+            controller.pause().stop().destroy();
+        }
+    }
+
+    @Test public void novelDownloadsCanSelectEveryChapter() throws Exception {
+        assertChapterDownloadSelection(false, 3);
+    }
+
+    @Test public void mangaDownloadsCanSelectEveryChapterInALongCatalogue() throws Exception {
+        assertChapterDownloadSelection(true, 52);
+    }
+
+    private void assertChapterDownloadSelection(boolean manga, int chapterCount) throws Exception {
+        var controller = Robolectric.buildActivity(Activity.class).setup();
+        Activity host = controller.get();
+        int kind = manga ? ReaderSources.COMIC : ReaderSources.NOVEL;
+        ReaderSection section = new ReaderSection(host, manga, 36,
+                new ReaderCache(new File(host.getCacheDir(), "batch-download-selection")), () -> {});
+        try {
+            host.setContentView(section.view());
+            ReaderSources sources = (ReaderSources) field("sources").get(section);
+            String origin = "https://download.example";
+            var installed = sources.importText(new JSONObject().put("bookSourceName", "章节下载测试")
+                    .put("bookSourceType", kind).put("bookSourceUrl", origin).put("searchUrl", origin + "/search")
+                    .toString(), kind).sources;
+            assertEquals(1, installed.size());
+            ReaderEngine.Book book = new ReaderEngine.Book(installed.get(0), "测试作品", "", "", "",
+                    origin + "/book", origin + "/book/chapters");
+            List<ReaderEngine.Chapter> chapters = new ArrayList<>();
+            for (int i = 0; i < chapterCount; i++) {
+                chapters.add(new ReaderEngine.Chapter(book, "第 " + (i + 1) + " 章", book.url + "/" + (i + 1)));
+            }
+            field("book").set(section, book);
+            field("chapters").set(section, chapters);
+            call(section, "showContents", new Class<?>[]{boolean.class}, false);
+            layout(section.view());
+
+            TextView batchDownload = label(section.view(), "批量下载章节");
+            assertNotNull(batchDownload);
+            assertTrue(batchDownload.performClick());
+            AlertDialog dialog = ShadowAlertDialog.getLatestAlertDialog();
+            var selectAll = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            var download = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            ListView list = dialog.getListView();
+            assertEquals(chapterCount, list.getCount());
+            assertEquals(0, list.getCheckedItemCount());
+            assertEquals("全选", selectAll.getText().toString());
+            assertEquals("下载所选", download.getText().toString());
+            assertFalse(download.isEnabled());
+
+            assertTrue(selectAll.performClick());
+            assertTrue(dialog.isShowing());
+            assertEquals(chapterCount, list.getCheckedItemCount());
+            assertEquals("取消全选", selectAll.getText().toString());
+            assertEquals("下载 " + chapterCount + " 章", download.getText().toString());
+            assertTrue(download.isEnabled());
+
+            layout(list);
+            assertTrue(list.performItemClick(list.getChildAt(0), 0, list.getItemIdAtPosition(0)));
+            assertEquals(chapterCount - 1, list.getCheckedItemCount());
+            assertEquals("全选", selectAll.getText().toString());
+            assertEquals("下载 " + (chapterCount - 1) + " 章", download.getText().toString());
+            assertTrue(selectAll.performClick());
+
+            assertTrue(selectAll.performClick());
+            assertTrue(dialog.isShowing());
+            assertEquals(0, list.getCheckedItemCount());
+            assertEquals("全选", selectAll.getText().toString());
+            assertFalse(download.isEnabled());
+            assertTrue(selectAll.performClick());
+            assertEquals(chapterCount, list.getCheckedItemCount());
+
+            // Keep the queue visible for assertions and prevent any network access.
+            CountDownLatch pauseDownloads = new CountDownLatch(1);
+            ((ExecutorService) field("downloads").get(section)).submit(() -> {
+                pauseDownloads.await();
+                return null;
+            });
+            assertTrue(download.performClick());
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertFalse(dialog.isShowing());
+            Map<?, ?> jobs = (Map<?, ?>) field("downloadJobs").get(section);
+            assertEquals(chapterCount, jobs.size());
+        } finally {
+            section.destroy();
             controller.pause().stop().destroy();
         }
     }

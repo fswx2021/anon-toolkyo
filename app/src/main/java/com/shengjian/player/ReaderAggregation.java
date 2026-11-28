@@ -1,12 +1,19 @@
 package com.shengjian.player;
 
+import java.io.EOFException;
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.NoRouteToHostException;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -18,6 +25,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
+import java.util.zip.ZipException;
+
+import javax.net.ssl.SSLException;
+
+import org.json.JSONException;
 
 /** Discovers published rule collections, then commits new sources together. */
 final class ReaderAggregation {
@@ -25,7 +37,12 @@ final class ReaderAggregation {
     private static final String AOAOSTAR = "https://legado.aoaostar.com/sources/";
     private static final String LUANMUC =
             "https://raw.githubusercontent.com/luanmuc/legado-book-sources/main/books.json";
+    private static final String YCK_COMIC_COLLECTION = YCK + "yiciyuan/tuyuans/content/id/60.html";
     private static final String YCK_RECENT_NOVELS = YCK + "yuedu/shuyuans/content/id/1333.html";
+    private static final Map<String, String> FEED_FALLBACKS = Map.of(
+            YCK_COMIC_COLLECTION, "https://cdn.jsdelivr.net/gh/mumuceo/file01/202505/1464_7472c3eddf0b923b5198a801bbe2e4c2.json",
+            YCK_RECENT_NOVELS, "https://cdn.jsdelivr.net/gh/mumuceo/file01/202611/14201_cf281dafaecca99a71a17563d4f41ab6.json",
+            LUANMUC, "https://cdn.jsdelivr.net/gh/luanmuc/legado-book-sources@main/books.json");
     private static final String XIU2 = AOAOSTAR + "71e56d4f.json";
     private static final String AOAOSTAR_ALL = AOAOSTAR + "b778fe6b.json";
     private static final Publisher NEW_MANGA_SOURCE = new Publisher("源仓库", PpcatStore.FEED_URL);
@@ -85,7 +102,7 @@ final class ReaderAggregation {
             return Arrays.asList(
                     NEW_MANGA_SOURCE,
                     new Publisher("源合集", "yiciyuan/tuyuans", 1, 10, false,
-                            YCK + "yiciyuan/tuyuans/content/id/60.html"),
+                            YCK_COMIC_COLLECTION),
                     new Publisher("单源目录", "yiciyuan/tuyuan", 10, 0, true),
                     new Publisher("近期源合集", YCK_RECENT_NOVELS),
                     new Publisher("补充源合集", LUANMUC),
@@ -194,7 +211,11 @@ final class ReaderAggregation {
     private static void collectFeed(ReaderSources sources, int kind, Collector collector, Batch batch,
                                     String feed) throws IOException {
         try {
-            batch.record(sources.prepareAggregateUrl(feed, kind), collector);
+            String fallback = FEED_FALLBACKS.get(feed);
+            ReaderSources.ImportPlan plan = fallback != null
+                    ? firstCompatible(sources, kind, List.of(feed, fallback))
+                    : sources.prepareAggregateUrl(feed, kind);
+            batch.record(plan, collector);
         } catch (IOException | RuntimeException failure) {
             if (Thread.currentThread().isInterrupted()) throw new IOException("聚合已取消", failure);
             batch.failed++;
@@ -270,9 +291,30 @@ final class ReaderAggregation {
     }
 
     private static String friendlyFailure(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ReaderSources.HttpFailure failure) {
+                String reason = switch (failure.status) {
+                    case 401, 403 -> "仓库拒绝访问";
+                    case 404, 410 -> "仓库地址或文件未找到";
+                    case 408 -> "仓库请求超时";
+                    case 429 -> "仓库请求过于频繁";
+                    default -> failure.status >= 500 ? "仓库服务异常" : "仓库请求失败";
+                };
+                return reason + "（HTTP " + failure.status + "）";
+            }
+            if (cause instanceof UnknownHostException) return "仓库域名解析失败";
+            if (cause instanceof SSLException) return "仓库 HTTPS 握手失败";
+            if (cause instanceof SocketTimeoutException) {
+                String message = String.valueOf(cause.getMessage()).toLowerCase(Locale.ROOT);
+                return message.contains("connect") ? "连接仓库超时" : "读取仓库超时";
+            }
+            if (cause instanceof ConnectException || cause instanceof NoRouteToHostException) return "无法连接仓库";
+            if (cause instanceof SocketException) return "仓库连接中断";
+            if (cause instanceof EOFException) return "仓库响应未传输完整";
+            if (cause instanceof JSONException || cause instanceof ZipException) return "仓库返回的规则无法解析";
+        }
         String message = error == null ? null : error.getMessage();
-        if (message == null || message.isEmpty()) return "仓库暂时无法读取";
-        if (message.matches("^[\\x00-\\x7f]+$")) return "仓库连接失败或响应无效";
+        if (message == null || message.isBlank() || message.matches("^[\\x00-\\x7f]+$")) return "无法读取仓库响应";
         return message.length() > 52 ? message.substring(0, 52) + "…" : message;
     }
 
@@ -298,28 +340,34 @@ final class ReaderAggregation {
     }
 
     private static final class Batch {
-        int pages, okay, known, failed, accepted, incompatible, encrypted;
-        boolean partial;
+        int pages, readable, known, failed, accepted, incompatible, encrypted;
+        boolean partial, bundledMangaArchive;
         String error = "";
 
         void record(ReaderSources.ImportPlan plan, Collector collector) {
-            okay++;
+            readable++;
             accepted += plan.sources.size();
             incompatible += plan.skipped;
             encrypted += plan.encrypted;
+            bundledMangaArchive |= plan.bundledMangaArchive;
             collector.add(plan);
         }
 
         Report report(String name) {
-            boolean success = okay > 0 || known > 0;
-            if (!success) return new Report(name, error.isEmpty() ? "暂无可读取的条目" : error, false);
-            String detail = (pages > 0 ? "已扫描 " + pages + " 页 · " : "") + "识别 " + accepted + " 条";
+            boolean success = accepted > 0 || known > 0;
+            boolean readRules = success || readable > 0;
+            String detail = pages > 0 ? "已扫描 " + pages + " 页 · " : "";
+            if (success) detail += "识别 " + accepted + " 条";
+            else if (readable > 0) detail += "仓库可连接，本栏目没有可导入的源";
+            else detail += error.isEmpty() ? "暂无可读取的条目" : error;
+            if (bundledMangaArchive) detail += " · 已使用包内备用规则";
             if (known > 0) detail += " · 已收录 " + known;
             if (incompatible > 0) detail += " · 跳过 " + incompatible;
             if (encrypted > 0) detail += "（其中规则加密 " + encrypted + " 条）";
             if (failed > 0) detail += " · " + failed + " 项读取失败";
             if (partial) detail += " · 部分目录暂未读取";
-            return new Report(name, detail, true);
+            if (readRules && !error.isEmpty()) detail += " · " + error;
+            return new Report(name, detail, success);
         }
     }
 }

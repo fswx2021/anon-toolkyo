@@ -1743,13 +1743,25 @@ public final class MainActivity extends ComponentActivity {
         promptedUpdateVersion = Math.max(promptedUpdateVersion, update.versionCode());
         pendingStartupUpdate = null;
         Sheet sheet = updateSheet("更新到 " + update.versionName());
-        if (!update.notes().isEmpty()) {
-            ScrollView scroll = new ScrollView(this);
-            TextView notes = text(update.notes(), 14, FG, false);
-            pad(notes, 0, 3, 0, 3);
-            scroll.addView(notes, new ScrollView.LayoutParams(M, W));
-            add(sheet.body, scroll, update.notes().length() > 180 ? 200 : W, 8);
-        }
+        TextView logHeading = text("更新日志", 14, FG, true);
+        if (Build.VERSION.SDK_INT >= 28) logHeading.setAccessibilityHeading(true);
+        add(sheet.body, logHeading, W, 8);
+        ScrollView log = new ScrollView(this) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int maxHeight = dp(200);
+                if (MeasureSpec.getMode(heightSpec) != MeasureSpec.UNSPECIFIED) {
+                    maxHeight = Math.min(maxHeight, MeasureSpec.getSize(heightSpec));
+                }
+                super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST));
+            }
+        };
+        log.setNestedScrollingEnabled(true);
+        boolean hasNotes = !update.notes().isEmpty();
+        TextView notes = text(hasNotes ? update.notes() : "此版本暂无更新日志。", 14, hasNotes ? FG : MUTED, false);
+        notes.setLineSpacing(dp(3), 1f);
+        pad(notes, 0, 3, 0, 3);
+        log.addView(notes, new ScrollView.LayoutParams(M, W));
+        add(sheet.body, log, W, 4);
         if (!downloadError.isEmpty()) {
             add(sheet.body, text(downloadError, 13, MUTED, false), W, 8);
         }
